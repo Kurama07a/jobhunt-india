@@ -1,0 +1,117 @@
+[
+  {
+    "id": "jobhuntIndiaContinuousDeploymentV1",
+    "name": "JobHunt India — Continuous Deployment Bridge",
+    "active": false,
+    "nodes": [
+      {
+        "parameters": {
+          "httpMethod": "POST",
+          "path": "jobhunt-cd-deploy",
+          "authentication": "headerAuth",
+          "responseMode": "lastNode",
+          "responseData": "firstEntryJson",
+          "options": {}
+        },
+        "id": "deploy-webhook",
+        "name": "GitHub — Start Deployment",
+        "type": "n8n-nodes-base.webhook",
+        "typeVersion": 2,
+        "position": [-300, -120],
+        "webhookId": "jobhunt-cd-deploy-v1",
+        "credentials": {
+          "httpHeaderAuth": {
+            "id": "jobhunt-cd-webhook-header-v1",
+            "name": "JobHunt CD Webhook"
+          }
+        }
+      },
+      {
+        "parameters": {
+          "method": "POST",
+          "url": "http://10.0.3.1:8000/api/v1/deploy?uuid=puiczlfsgrn4qcmtksghdoti&force=false",
+          "authentication": "genericCredentialType",
+          "genericAuthType": "httpHeaderAuth",
+          "options": {
+            "timeout": 30000
+          }
+        },
+        "id": "queue-coolify-deployment",
+        "name": "Coolify — Queue Deployment",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [0, -120],
+        "credentials": {
+          "httpHeaderAuth": {
+            "id": "jobhunt-coolify-header-v1",
+            "name": "JobHunt Coolify API"
+          }
+        }
+      },
+      {
+        "parameters": {
+          "httpMethod": "POST",
+          "path": "jobhunt-cd-status",
+          "authentication": "headerAuth",
+          "responseMode": "lastNode",
+          "responseData": "firstEntryJson",
+          "options": {}
+        },
+        "id": "status-webhook",
+        "name": "GitHub — Check Deployment",
+        "type": "n8n-nodes-base.webhook",
+        "typeVersion": 2,
+        "position": [-300, 120],
+        "webhookId": "jobhunt-cd-status-v1",
+        "credentials": {
+          "httpHeaderAuth": {
+            "id": "jobhunt-cd-webhook-header-v1",
+            "name": "JobHunt CD Webhook"
+          }
+        }
+      },
+      {
+        "parameters": {
+          "url": "=http://10.0.3.1:8000/api/v1/deployments/{{encodeURIComponent($json.body.deployment_uuid)}}",
+          "authentication": "genericCredentialType",
+          "genericAuthType": "httpHeaderAuth",
+          "options": {
+            "timeout": 30000
+          }
+        },
+        "id": "get-coolify-deployment",
+        "name": "Coolify — Get Deployment",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [0, 120],
+        "credentials": {
+          "httpHeaderAuth": {
+            "id": "jobhunt-coolify-header-v1",
+            "name": "JobHunt Coolify API"
+          }
+        }
+      }
+    ],
+    "connections": {
+      "GitHub — Start Deployment": {
+        "main": [[{ "node": "Coolify — Queue Deployment", "type": "main", "index": 0 }]]
+      },
+      "GitHub — Check Deployment": {
+        "main": [[{ "node": "Coolify — Get Deployment", "type": "main", "index": 0 }]]
+      }
+    },
+    "settings": {
+      "executionOrder": "v1",
+      "timezone": "Europe/Berlin",
+      "saveManualExecutions": true,
+      "callerPolicy": "workflowsFromSameOwner"
+    },
+    "staticData": null,
+    "meta": {
+      "templateCredsSetupCompleted": true
+    },
+    "pinData": {},
+    "tags": []
+  }
+]
+

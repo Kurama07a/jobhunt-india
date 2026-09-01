@@ -66,6 +66,19 @@ python -m pytest -q
 docker build -t jobhunt-india .
 ```
 
+## Continuous delivery
+
+GitHub Actions runs the Python tests, compiles the application, validates the dashboard
+JavaScript, and builds the production Docker image for every pull request and every push
+to `main`. A passing `main` build then calls the token-protected n8n deployment bridge,
+waits for Coolify to finish, verifies that Coolify deployed the exact Git commit, and
+smoke-tests both the production health endpoint and dashboard.
+
+The workflow is in `.github/workflows/ci-cd.yml`. Production deployment requires the
+repository secret `CD_DEPLOY_TOKEN`; the corresponding n8n header credential and the
+Coolify API credential are stored only in n8n. Coolify's direct auto-deploy is disabled
+so failed CI can never reach production.
+
 With PostgreSQL available, initialize and run a bounded live smoke test:
 
 ```bash
