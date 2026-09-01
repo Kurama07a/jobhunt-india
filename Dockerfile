@@ -5,7 +5,7 @@ RUN git clone --filter=blob:none https://github.com/mherzog4/job-boards.git /sou
     && git -C /source/job-boards checkout "$JOB_BOARDS_COMMIT" \
     && rm -rf /source/job-boards/.git
 
-FROM python:3.12.11-slim-bookworm@sha256:519591d6871b7bc437060736b9f7456b8731f1499a57e22e6c285135ae657bf7
+FROM python:3.14.7-slim-bookworm@sha256:9ab8d9c8514b44f90cf0029dd42fdd7e9e211e639c8b995304cc04568dee900f
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
