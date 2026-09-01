@@ -22,6 +22,41 @@ def test_indian_city_location_is_detected():
     assert not location_is_india("Berlin, Germany")
 
 
+def test_remote_overseas_office_is_not_matched_by_generic_india_copy():
+    result = classify_job(
+        title="Software Engineer",
+        description="We are a global company with offices in India, the US, and Europe.",
+        location="San Francisco-HQ",
+        board_slug="example",
+        board_is_india=False,
+        is_remote=True,
+    )
+    assert not result.is_target
+
+
+def test_generic_remote_role_requires_explicit_india_eligibility():
+    result = classify_job(
+        title="Junior Software Engineer",
+        description="Candidates must be based in India and may work from home.",
+        location="APAC | Remote",
+        board_slug="example",
+        board_is_india=False,
+        is_remote=True,
+    )
+    assert result.is_target
+    assert result.india_match_reason == "remote_from_india"
+
+    work_from_india = classify_job(
+        title="Software Developer",
+        description="This role can work from India.",
+        location="Remote",
+        board_slug="example",
+        board_is_india=False,
+        is_remote=True,
+    )
+    assert work_from_india.is_target
+
+
 def test_software_role_rejects_non_software_engineering():
     assert is_software_role("Backend Software Engineer")
     assert is_software_role("Engineer", team="Cloud Platform", description="Build APIs in Python")

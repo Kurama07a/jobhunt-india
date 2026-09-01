@@ -346,6 +346,89 @@ UPSERT_JOB_SQL = """
 """
 
 
+def reclassify_existing_jobs() -> dict[str, int]:
+    """Re-evaluate stored jobs after classifier changes without refetching ATS data."""
+    rows = fetch_all(
+        """
+        SELECT j.id::text, j.title, j.description, j.location, j.board_slug,
+            j.is_remote, j.department, j.team,
+            COALESCE(b.is_india_company, false) AS board_is_india
+        FROM jobs j
+        LEFT JOIN job_boards b
+            ON b.ats = j.ats AND b.slug = j.board_slug
+        WHERE j.is_active
+        """
+    )
+    updates: list[dict[str, Any]] = []
+    closures: list[tuple[str]] = []
+    for row in rows:
+        classification = classify_job(
+            title=row["title"],
+            description=row["description"],
+            location=row["location"],
+            board_slug=row["board_slug"],
+            board_is_india=bool(row["board_is_india"]),
+            is_remote=bool(row["is_remote"]),
+            department=row["department"],
+            team=row["team"],
+        )
+        if not classification.is_target:
+            closures.append((row["id"],))
+            continue
+        updates.append(
+            {
+                "id": row["id"],
+                "city": classification.city,
+                "india_match_reason": classification.india_match_reason,
+                "experience_min": classification.experience_min,
+                "experience_max": classification.experience_max,
+                "experience_level": classification.experience_level,
+                "experience_is_explicit": classification.experience_is_explicit,
+                "entry_level_score": classification.entry_level_score,
+                "skills": classification.skills,
+                "salary_min": classification.salary_min,
+                "salary_max": classification.salary_max,
+                "salary_currency": classification.salary_currency,
+                "salary_period": classification.salary_period,
+            }
+        )
+
+    with pool.connection() as conn:
+        with conn.transaction():
+            with conn.cursor() as cursor:
+                if updates:
+                    cursor.executemany(
+                        """
+                        UPDATE jobs SET
+                            city = %(city)s,
+                            india_match_reason = %(india_match_reason)s,
+                            experience_min = %(experience_min)s,
+                            experience_max = %(experience_max)s,
+                            experience_level = %(experience_level)s,
+                            experience_is_explicit = %(experience_is_explicit)s,
+                            entry_level_score = %(entry_level_score)s,
+                            skills = %(skills)s,
+                            salary_min = %(salary_min)s,
+                            salary_max = %(salary_max)s,
+                            salary_currency = %(salary_currency)s,
+                            salary_period = %(salary_period)s,
+                            updated_at = now()
+                        WHERE id = %(id)s::uuid
+                        """,
+                        updates,
+                    )
+                if closures:
+                    cursor.executemany(
+                        """
+                        UPDATE jobs SET is_active = false,
+                            closed_at = COALESCE(closed_at, now()), updated_at = now()
+                        WHERE id = %s::uuid AND is_active
+                        """,
+                        closures,
+                    )
+    return {"scanned": len(rows), "updated": len(updates), "closed": len(closures)}
+
+
 def _persist_board_result(result: dict[str, Any]) -> dict[str, int]:
     status = result["status"]
     ats = result["ats"]
@@ -574,7 +657,9 @@ def run_ingestion(run_id: str, mode: str, limit_per_ats: int | None = None) -> N
                     executor.submit(_fetch_board, board, use_etag): board for board in boards
                 }
                 for future in as_completed(future_map):
-                    board = future_map[future]
+                    # Drop completed futures immediately so their parsed ATS payloads and
+                    # job descriptions do not accumulate across a 13k-board sweep.
+                    board = future_map.pop(future)
                     try:
                         result = future.result()
                     except Exception as exc:

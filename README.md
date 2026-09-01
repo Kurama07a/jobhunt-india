@@ -11,7 +11,9 @@ designed for `https://jobhunt.prakhar.wtf` and is refreshed by n8n.
 - Discovers and checks public Ashby, Greenhouse, and Lever company boards with a fixed
   maximum concurrency of 8 and an identifiable `JOB_SCRAPER_CONTACT` user agent.
 - Keeps India-located software roles plus software roles from recognized Indian-company
-  boards. The database, not the browser, owns classification and lifecycle state.
+  boards. Geography-neutral remote roles require explicit India eligibility in the job
+  copy, preventing overseas office roles with generic India mentions from leaking into
+  the feed. The database, not the browser, owns classification and lifecycle state.
 - Extracts explicit experience ranges, infers experience level, assigns an early-career
   score, identifies common engineering skills, and parses salary ranges when published.
 - Marks roles inactive only after a successful exhaustive board response omits them.
@@ -69,6 +71,7 @@ With PostgreSQL available, initialize and run a bounded live smoke test:
 ```bash
 python -m app.cli init-db
 python -m app.cli ingest --mode smoke --limit-per-ats 2
+python -m app.cli reclassify  # apply classifier updates without refetching boards
 ```
 
 ## API surface
@@ -88,4 +91,3 @@ The upstream `job-boards` source is copied into the production image from its pi
 MIT-licensed commit. Its own `LICENSE` remains in `/opt/job-boards/LICENSE` inside the
 image. Job descriptions and application URLs remain attributed to the publishing
 companies and ATS endpoints; this service stores only public recruitment data.
-

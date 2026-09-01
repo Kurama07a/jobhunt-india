@@ -40,6 +40,50 @@ INDIA_TERMS = (
     "goa",
 )
 
+_INDIA_TERM_PATTERN = "(?:" + "|".join(
+    re.escape(term) for term in sorted(INDIA_TERMS, key=len, reverse=True)
+) + ")"
+
+# Some ATS payloads set `isRemote` for hybrid roles tied to a specific overseas
+# office. Only use description-based India evidence when the location itself is
+# genuinely geography-neutral and the copy explicitly describes India eligibility.
+_GENERIC_REMOTE_LOCATION_TOKENS = {
+    "anywhere",
+    "apac",
+    "asia",
+    "based",
+    "distributed",
+    "flexible",
+    "global",
+    "home",
+    "hybrid",
+    "location",
+    "locations",
+    "multiple",
+    "only",
+    "pacific",
+    "remote",
+    "virtual",
+    "worldwide",
+}
+_REMOTE_INDIA_ELIGIBILITY_RE = re.compile(
+    rf"(?:"
+    rf"\b(?:based|located|resid(?:e|ing)|residents?)\s+in\s+"
+    rf"{_INDIA_TERM_PATTERN}\b|"
+    rf"\bwork(?:ing)?\s+from\s+"
+    rf"{_INDIA_TERM_PATTERN}\b|"
+    rf"\b(?:candidates?|applicants?)\s+(?:must\s+be\s+)?(?:based|located|residing)\s+in\s+"
+    rf"{_INDIA_TERM_PATTERN}\b|"
+    rf"\b(?:open|available)\s+(?:to|for)\s+(?:candidates?|applicants?)\s+in\s+"
+    rf"{_INDIA_TERM_PATTERN}\b|"
+    rf"\bremote(?:\s+(?:role|position|job|opportunity))?\s*(?:[-–—,:/]\s*|in\s+)"
+    rf"{_INDIA_TERM_PATTERN}\b|"
+    rf"\b{_INDIA_TERM_PATTERN}\b\s*(?:[-–—,:/]\s*)?"
+    rf"(?:remote|only|based|residents?|candidates?|applicants?|location)\b"
+    rf")",
+    re.IGNORECASE,
+)
+
 CITY_NAMES = {
     term: term.title()
     for term in INDIA_TERMS
@@ -272,6 +316,17 @@ def location_is_india(location: str) -> bool:
     return any(re.search(rf"\b{re.escape(term)}\b", lowered) for term in INDIA_TERMS)
 
 
+def remote_description_allows_india(location: str, description: str) -> bool:
+    """Return true only for explicit India eligibility at a generic remote location."""
+    location_tokens = set(re.findall(r"[a-z]+", plain_text(location).lower()))
+    location_is_generic = not location_tokens or location_tokens.issubset(
+        _GENERIC_REMOTE_LOCATION_TOKENS
+    )
+    if not location_is_generic:
+        return False
+    return bool(_REMOTE_INDIA_ELIGIBILITY_RE.search(plain_text(description)))
+
+
 def extract_city(location: str) -> str | None:
     lowered = plain_text(location).lower()
     for term in sorted(CITY_NAMES, key=len, reverse=True):
@@ -289,10 +344,7 @@ def india_match(
 ) -> tuple[bool, str]:
     if location_is_india(location):
         return True, "india_location"
-    description_l = plain_text(description).lower()
-    if is_remote and any(
-        re.search(rf"\b{re.escape(term)}\b", description_l) for term in INDIA_TERMS
-    ):
+    if is_remote and remote_description_allows_india(location, description):
         return True, "remote_from_india"
     if board_is_india or is_known_indian_company(board_slug):
         return True, "indian_company"
