@@ -15,6 +15,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends curl \
+    && rm -rf /var/lib/apt/lists/*
+
 RUN groupadd --system --gid 10001 jobhunt \
     && useradd --system --uid 10001 --gid jobhunt --home-dir /app jobhunt
 
