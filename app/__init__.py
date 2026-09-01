@@ -1,0 +1,2 @@
+"""JobHunt India application package."""
+

@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="Fresh, entry-level software engineering jobs for India, gathered directly from company job boards." />
+    <meta name="theme-color" content="#f4f0e7" />
+    <title>JobHunt India — Entry-level software jobs</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+    <script src="/static/app.js" defer></script>
+  </head>
+  <body>
+    <div class="grain" aria-hidden="true"></div>
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="JobHunt India home">
+        <span class="brand-mark" aria-hidden="true"><span></span></span>
+        <span>JobHunt<span class="brand-accent">India</span></span>
+      </a>
+      <div class="topbar-meta">
+        <span class="live-dot" aria-hidden="true"></span>
+        <span id="sync-label">Connecting to the live feed…</span>
+      </div>
+    </header>
+
+    <main>
+      <section class="hero" aria-labelledby="hero-title">
+        <div class="hero-copy">
+          <div class="eyebrow"><span>INDIA</span><i></i><span>SOFTWARE ENGINEERING</span></div>
+          <h1 id="hero-title">The early-career job feed that respects your time.</h1>
+          <p>Fresh roles from company career pages, ranked for interns, new grads, freshers, and junior engineers—not buried beneath senior openings.</p>
+        </div>
+        <div class="hero-orbit" aria-hidden="true">
+          <div class="orbit-ring ring-one"></div>
+          <div class="orbit-ring ring-two"></div>
+          <div class="orbit-core">01</div>
+          <span class="orbit-tag tag-a">FRESH</span>
+          <span class="orbit-tag tag-b">FILTERED</span>
+          <span class="orbit-tag tag-c">DIRECT</span>
+        </div>
+      </section>
+
+      <section class="metrics" aria-label="Feed statistics">
+        <article class="metric-card">
+          <span class="metric-index">01</span>
+          <strong id="metric-jobs">—</strong>
+          <span>live software roles</span>
+        </article>
+        <article class="metric-card">
+          <span class="metric-index">02</span>
+          <strong id="metric-entry">—</strong>
+          <span>entry &amp; internship</span>
+        </article>
+        <article class="metric-card">
+          <span class="metric-index">03</span>
+          <strong id="metric-fresh">—</strong>
+          <span>posted in 24 hours</span>
+        </article>
+        <article class="metric-card metric-card-accent">
+          <span class="metric-index">04</span>
+          <strong id="metric-boards">—</strong>
+          <span>company boards watched</span>
+        </article>
+      </section>
+
+      <section class="search-panel" aria-label="Job filters">
+        <div class="search-row">
+          <label class="search-box" for="search-input">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m21 21-4.35-4.35m2.35-5.65a8 8 0 1 1-16 0 8 8 0 0 1 16 0Z"/></svg>
+            <input id="search-input" type="search" placeholder="Search roles, skills, or companies" autocomplete="off" />
+            <kbd>⌘ K</kbd>
+          </label>
+          <button id="advanced-toggle" class="filter-button" type="button" aria-expanded="false" aria-controls="advanced-filters">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h2M10 17h10M14 4v6M6 14v6"/></svg>
+            Filters <span id="filter-count">0</span>
+          </button>
+        </div>
+
+        <div class="quick-filters">
+          <div class="filter-group">
+            <span class="filter-label">EXPERIENCE</span>
+            <div class="chip-row" id="level-chips">
+              <button class="chip active" data-level="internship" type="button">Internships</button>
+              <button class="chip active" data-level="entry" type="button">Entry level</button>
+              <button class="chip active" data-level="unknown" type="button">Open level</button>
+              <button class="chip" data-level="mid" type="button">Mid</button>
+              <button class="chip" data-level="senior" type="button">Senior</button>
+            </div>
+          </div>
+          <div class="filter-group">
+            <span class="filter-label">POSTED WITHIN</span>
+            <div class="segmented" id="days-filter">
+              <button data-days="1" type="button">24h</button>
+              <button data-days="3" type="button">3d</button>
+              <button data-days="7" type="button">7d</button>
+              <button class="active" data-days="30" type="button">30d</button>
+              <button data-days="" type="button">Any</button>
+            </div>
+          </div>
+          <label class="toggle-control">
+            <input id="remote-filter" type="checkbox" />
+            <span class="toggle-track"><span></span></span>
+            Remote only
+          </label>
+        </div>
+
+        <div id="advanced-filters" class="advanced-filters" hidden>
+          <label>
+            <span>Company</span>
+            <select id="company-filter"><option value="">All companies</option></select>
+          </label>
+          <label>
+            <span>Location contains</span>
+            <input id="location-filter" list="locations-list" placeholder="e.g. Bengaluru" />
+            <datalist id="locations-list"></datalist>
+          </label>
+          <label>
+            <span>Skill</span>
+            <select id="skill-filter"><option value="">Any skill</option></select>
+          </label>
+          <label>
+            <span>Source</span>
+            <select id="ats-filter">
+              <option value="">All sources</option>
+              <option value="ashby">Ashby</option>
+              <option value="greenhouse">Greenhouse</option>
+              <option value="lever">Lever</option>
+            </select>
+          </label>
+          <label>
+            <span>My experience</span>
+            <select id="experience-filter">
+              <option value="">Any requirement</option>
+              <option value="0">No experience</option>
+              <option value="1">Up to 1 year</option>
+              <option value="2">Up to 2 years</option>
+              <option value="3">Up to 3 years</option>
+              <option value="5">Up to 5 years</option>
+            </select>
+          </label>
+          <label>
+            <span>Employment</span>
+            <select id="employment-filter">
+              <option value="">Any employment type</option>
+              <option value="full">Full-time</option>
+              <option value="intern">Internship</option>
+              <option value="contract">Contract</option>
+              <option value="part">Part-time</option>
+            </select>
+          </label>
+          <button id="clear-filters" class="clear-button" type="button">Reset all filters</button>
+        </div>
+      </section>
+
+      <section class="results-section" aria-live="polite">
+        <div class="results-heading">
+          <div>
+            <span class="section-kicker">CURATED FEED</span>
+            <h2><span id="result-count">—</span> opportunities</h2>
+          </div>
+          <label class="sort-control">
+            <span>Sort by</span>
+            <select id="sort-filter">
+              <option value="entry">Best for early career</option>
+              <option value="recent">Newest first</option>
+              <option value="experience">Least experience</option>
+              <option value="company">Company name</option>
+            </select>
+          </label>
+        </div>
+
+        <div id="sync-progress" class="sync-progress" hidden>
+          <div class="sync-progress-copy">
+            <span class="spinner" aria-hidden="true"></span>
+            <strong>Refreshing the live feed</strong>
+            <span id="sync-progress-text">Scanning company boards…</span>
+          </div>
+          <div class="progress-track"><span id="sync-progress-bar"></span></div>
+        </div>
+
+        <div id="jobs-grid" class="jobs-grid" aria-busy="true"></div>
+        <div id="empty-state" class="empty-state" hidden>
+          <div class="empty-mark">∅</div>
+          <h3>No roles match this exact mix.</h3>
+          <p>Try widening the posting window or adding “Open level”—many companies omit years of experience.</p>
+          <button id="empty-reset" type="button">Show the entry feed</button>
+        </div>
+        <button id="load-more" class="load-more" type="button" hidden>Load more opportunities <span>↓</span></button>
+      </section>
+    </main>
+
+    <footer>
+      <div class="brand footer-brand"><span class="brand-mark"><span></span></span><span>JobHuntIndia</span></div>
+      <p>Direct from public Ashby, Greenhouse, and Lever company boards. Built for signal, not scraping theatre.</p>
+      <a href="https://github.com/mherzog4/job-boards" target="_blank" rel="noopener noreferrer">Discovery engine ↗</a>
+    </footer>
+
+    <dialog id="job-modal" class="job-modal">
+      <button id="modal-close" class="modal-close" type="button" aria-label="Close job details">×</button>
+      <div id="modal-content"></div>
+    </dialog>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  </body>
+</html>
