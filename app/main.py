@@ -256,6 +256,9 @@ def list_jobs(
         where.append("j.employment_type ILIKE %s")
         params.append(f"%{employment_type.strip()}%")
     if max_experience is not None:
+        # A numeric ceiling is meaningful only when the publisher stated a
+        # requirement; inferred/unknown roles remain available via the level chips.
+        where.append("j.experience_is_explicit = true")
         where.append("COALESCE(j.experience_min, 0) <= %s")
         params.append(max_experience)
     if explicit_experience is not None:
