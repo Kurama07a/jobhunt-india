@@ -4,9 +4,9 @@ PostgreSQL is the single source of truth. The full schema is `app/schema.sql`, a
 idempotently on every process start by `open_pool()` (`app/db.py:24`). Extensions:
 `pgcrypto` (for `gen_random_uuid()`) and `pg_trgm` (trigram indexes).
 
-`schema.sql` ends with an idempotent migration block (`schema_version` is now `2`): a
+`schema.sql` ends with an idempotent migration block (`schema_version` is now `3`): a
 `DO $$ … $$` that widens the `ats` CHECK constraints on `job_boards` and `jobs` to
-include `smartrecruiters` (a bare `CREATE TABLE IF NOT EXISTS` never alters an existing
+include `smartrecruiters` and `workable` (a bare `CREATE TABLE IF NOT EXISTS` never alters an existing
 table), and `ALTER TABLE … ADD COLUMN IF NOT EXISTS last_discovered_at`. Safe to run on
 every boot; validated against the production DB inside a rolled-back transaction.
 
@@ -17,7 +17,7 @@ Connection pool (`app/db.py`): `psycopg_pool.ConnectionPool`, `min_size=1`,
 
 ## `schema_meta`
 
-Key/value table. Currently holds `schema_version = '2'`. `/health` reads it to prove the
+Key/value table. Currently holds `schema_version = '3'`. `/health` reads it to prove the
 schema is present.
 
 | Column | Type | Notes |
@@ -34,7 +34,7 @@ One row per discovered company board. PK is `(ats, slug)`.
 
 | Column | Type | Meaning |
 |---|---|---|
-| `ats` | `text` | `ashby` \| `greenhouse` \| `lever` \| `smartrecruiters` (CHECK) |
+| `ats` | `text` | `ashby` \| `greenhouse` \| `lever` \| `smartrecruiters` \| `workable` (CHECK) |
 | `slug` | `text` | vendor board identifier (the `{slug}` in the API URL) |
 | `display_name` | `text` | human name, from `display_company(slug)` |
 | `is_india_company` | `bool` | recognised Indian company. **Sticky** — only ever OR‑ed to true |
@@ -52,7 +52,7 @@ One row per discovered company board. PK is `(ats, slug)`.
 Indexes: `job_boards_active_idx (is_active, ats, slug)`,
 `job_boards_india_idx (is_india_company) WHERE is_india_company`.
 
-`discovered_via` also takes `directed_india` (slug-probe hit) since schema v2.
+`discovered_via` also takes `directed_india` (slug-probe hit) and `workable_feed` since schema v2+.
 
 ---
 
@@ -66,7 +66,7 @@ One row per posting, keyed internally by a UUID `id`, uniquely by
 | Column | Type | Meaning |
 |---|---|---|
 | `id` | `uuid` PK | `gen_random_uuid()` |
-| `ats` | `text` | CHECK in (`ashby`,`greenhouse`,`lever`) |
+| `ats` | `text` | CHECK in (`ashby`,`greenhouse`,`lever`,`smartrecruiters`,`workable`) |
 | `source_job_id` | `text` | vendor posting id; `UNIQUE (ats, source_job_id)` |
 | `board_slug` | `text` | FK → `job_boards (ats, slug)` `ON UPDATE CASCADE` |
 | `company` | `text` | `job_boards.display_name` or derived |

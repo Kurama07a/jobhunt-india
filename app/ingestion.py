@@ -79,6 +79,31 @@ def _description_excerpt(description: str, length: int = 420) -> str:
     return f"{clipped}…"
 
 
+_INSERT_BOARD_SQL = """
+    INSERT INTO job_boards (
+        ats, slug, display_name, is_india_company, discovered_via, is_active
+    ) VALUES (
+        %(ats)s, %(slug)s, %(display_name)s, %(is_india_company)s,
+        %(discovered_via)s, true
+    )
+    ON CONFLICT (ats, slug) DO UPDATE SET
+        display_name = excluded.display_name,
+        is_india_company = job_boards.is_india_company OR excluded.is_india_company,
+        is_active = true,
+        updated_at = now()
+"""
+
+
+def _insert_board_rows(rows: list[dict[str, Any]]) -> int:
+    if not rows:
+        return 0
+    with pool.connection() as conn:
+        with conn.transaction():
+            with conn.cursor() as cursor:
+                cursor.executemany(_INSERT_BOARD_SQL, rows)
+    return len(rows)
+
+
 def import_boards_payload(payload: dict[str, list[str]], discovered_via: str) -> int:
     rows: list[dict[str, Any]] = []
     for ats in ALL_ATS:
@@ -94,26 +119,45 @@ def import_boards_payload(payload: dict[str, list[str]], discovered_via: str) ->
                     "discovered_via": discovered_via,
                 }
             )
-    if not rows:
-        return 0
-    query = """
-        INSERT INTO job_boards (
-            ats, slug, display_name, is_india_company, discovered_via, is_active
-        ) VALUES (
-            %(ats)s, %(slug)s, %(display_name)s, %(is_india_company)s,
-            %(discovered_via)s, true
-        )
-        ON CONFLICT (ats, slug) DO UPDATE SET
-            display_name = excluded.display_name,
-            is_india_company = job_boards.is_india_company OR excluded.is_india_company,
-            is_active = true,
-            updated_at = now()
+    return _insert_board_rows(rows)
+
+
+def _prime_feed_sources(force: bool) -> int:
+    """Refresh feed-based extra sources (Workable) and register a board per company.
+
+    Workable has no per-company API reachable by slug guess or web archive, so we
+    pull its India marketplace feed, cache it in app.sources, and register a
+    job_boards row for every company it contains. The normal per-board sweep then
+    serves each Workable board from that cache with no further HTTP. A feed outage
+    leaves the previous run's boards in place; their next fetch finds an empty
+    cache and closes their jobs.
+
+    ``force`` re-pulls the feed (~2 min, sequential). Incremental sweeps pass
+    ``False`` and reuse the cache the daily discovery run populated; only a cold
+    process actually pulls.
     """
-    with pool.connection() as conn:
-        with conn.transaction():
-            with conn.cursor() as cursor:
-                cursor.executemany(query, rows)
-    return len(rows)
+    registered = 0
+    for ats, cfg in sources.EXTRA_ATS.items():
+        feed = cfg.get("feed")
+        if feed is None:
+            continue
+        try:
+            titles = feed(force=force)
+        except Exception:
+            continue
+        rows = [
+            {
+                "ats": ats,
+                "slug": slug,
+                "display_name": (title or slug)[:200],
+                "is_india_company": True,
+                "discovered_via": f"{ats}_feed",
+            }
+            for slug, title in titles.items()
+            if upstream.plausible(slug, ats)
+        ]
+        registered += _insert_board_rows(rows)
+    return registered
 
 
 def import_boards_file(path: str | Path, discovered_via: str = "import") -> int:
@@ -168,12 +212,14 @@ def refresh_boards(mode: str) -> int:
     )
     import_boards_payload(payload, "recent_discovery" if recent else "full_discovery")
 
-    # 2. Directed discovery: probe every ATS (including SmartRecruiters) with slug
-    #    guesses from the curated Indian-company roster. This reaches boards no web
-    #    archive has captured, and is where most net-new India coverage comes from.
+    # 2. Directed discovery: probe each per-slug ATS (upstream three + SmartRecruiters)
+    #    with slug guesses from the curated Indian-company roster. This reaches boards
+    #    no web archive captured. Feed-based sources (Workable) are excluded — their
+    #    board list comes wholesale from _prime_feed_sources.
+    probe_ats = [a for a in ALL_ATS if "feed" not in sources.EXTRA_ATS.get(a, {})]
     directed = sources.discover_indian_boards(
         known=_known_slugs_by_ats(),
-        ats_list=ALL_ATS,
+        ats_list=probe_ats,
         concurrency=settings.max_workers,
     )
     if directed:
@@ -788,6 +834,11 @@ def run_ingestion(run_id: str, mode: str, limit_per_ats: int | None = None) -> N
                 started_at=datetime.now(timezone.utc),
             )
             ensure_seed_boards()
+            # Feed-based sources (Workable): the feed IS the board list. Re-pull it
+            # on the daily/monthly discovery runs; incremental sweeps reuse that
+            # cache (a cold process pulls once). smoke stays offline.
+            if mode != "smoke":
+                _prime_feed_sources(force=mode in {"refresh_recent", "full_discovery"})
             discovered = 0
             if mode in {"refresh_recent", "full_discovery"}:
                 discovered = refresh_boards(mode)

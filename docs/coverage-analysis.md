@@ -44,8 +44,8 @@ All throwaway HTTP probes, no writes. Full log: the commit that added this file.
 | Source | Verdict | Evidence |
 |---|---|---|
 | **SmartRecruiters** | **integrated** | `api.smartrecruiters.com/v1/companies/{slug}/postings` — public, no auth, `?country=in` filter (Bosch 4799→546, Swiggy 69), rich shape, `jobAd.sections` HTML descriptions, apply URL `jobs.smartrecruiters.com/{id}` (200), archive-discoverable (Wayback 30d → 289 candidates). Blind slug guesses found Swiggy (69 IN), Freshworks (34 IN of 157), ixigo, Unacademy, Whatfix, Cars24, Upstox, Lendingkart, Refyne, MindTickle, HackerRank — all net-new. |
-| **Directed slug-probing** | **integrated** | 29/123 curated Indian companies got a board hit with naive slug-gen (~24%); most net-new hits were SmartRecruiters. |
-| Workable | deferred | Widget endpoint returns `jobs: []` for every tested account (deel, remote, andela…); `apply.workable.com` absent from urlscan; `spi/v3` needs auth. |
+| **Workable** | **integrated (feed)** | The *widget* endpoint (`apply.workable.com/api/v1/widget/accounts/{slug}`) is dead for most accounts, and Workable is an embedded widget so its boards are invisible to web archives — but `jobs.workable.com/api/v1/jobs?location=india` is a **public marketplace API**: 3,811 India jobs, full HTML descriptions inline, `company.title`, `workplace` (on_site/hybrid/remote — 874 remote), pagination via `nextPageToken`. 313 distinct companies incl. Apna (161), 2070Health (111), Innovaccer Analytics, Exponent Energy, wati.io, Lokal, Lakshya Digital. One ~2-min sequential feed pull per discovery run; no per-board HTTP. |
+| **Directed slug-probing** | **integrated** | 29/123 curated Indian companies got a board hit with naive slug-gen (~24%); most net-new hits were SmartRecruiters. Zero curated companies were on the Workable *widget*. |
 | Recruitee | deferred | `{slug}.recruitee.com/api/offers` → "Not Found" for known customers; API gated. EU-centric. |
 | Keka / Freshteam / Zoho Recruit | deferred | No stable unauthenticated JSON endpoint. |
 | **Workday** | **follow-up — biggest remaining** | `{tenant}.wd{N}.myworkdayjobs.com/wday/cxs/{tenant}/{site}/jobs` reachable (HTTP 422, not 404) but needs per-tenant `(tenant, wdN, site)` discovery + correct POST body / anti-bot handling. This is where Flipkart, PhonePe, Zomato and most GCC early-career volume lives. |
@@ -56,16 +56,22 @@ All throwaway HTTP probes, no writes. Full log: the commit that added this file.
 ### Tier 1 — supply
 
 - **`app/sources.py`** — new module. A native **SmartRecruiters** adapter (pagination,
-  `?country=in`, on-demand `jobAd` description fetch) plus **directed discovery**:
-  probe every ATS endpoint with slug candidates generated from a curated roster.
-  Reuses `upstream.fetch` so the User-Agent / retry / backoff contract is unchanged.
+  `?country=in`, on-demand `jobAd` description fetch); a **Workable** feed source
+  (pull `jobs.workable.com/api/v1/jobs?location=india` once, cache by company, serve
+  each board from cache — no per-board HTTP); and **directed discovery**: probe each
+  per-slug ATS endpoint with slug candidates from a curated roster. Reuses
+  `upstream.fetch` so the User-Agent / retry / backoff contract is unchanged.
+- **`_prime_feed_sources()`** runs before every sweep. It re-pulls the Workable feed
+  on the daily/monthly discovery runs (~2 min, sequential); incremental sweeps reuse
+  that cache. It registers a `job_boards` row per Workable company.
 - **`data/indian-companies.json`** — ~320-company curated roster of Indian software
   employers (`name` + ATS slug candidates). Feeds both `classifier.is_known_indian_company`
   (slug hints: 40 → 427 normalized) and directed discovery.
 - **`data/india-boards.seed.json`** — added a `smartrecruiters` key and more
   confirmed India-heavy Ashby/Greenhouse/Lever slugs.
-- **Schema v2** — `ats` CHECK on `job_boards` and `jobs` widened to include
-  `smartrecruiters` via an idempotent migration; new `job_boards.last_discovered_at`.
+- **Schema v3** — `ats` CHECK on `job_boards` and `jobs` widened to include
+  `smartrecruiters` and `workable` via an idempotent, target-list-driven migration;
+  new `job_boards.last_discovered_at`.
 - **`is_india_company` auto-promotion** (`_promote_india_companies`, every sweep) —
   a board with ≥3 India-located active postings, or ≥40% of ≥2, is flagged. On the
   current data this promotes **~415 boards** (8 → ~423), unlocking their remote roles.
@@ -98,12 +104,20 @@ All throwaway HTTP probes, no writes. Full log: the commit that added this file.
 
 ## Expected effect
 
+- **Workable**: **313 company boards / 3,811 raw India jobs** enter the pipeline (of
+  which the software classifier keeps an estimated 800–1,200). 874 of the raw jobs are
+  remote. Apna, 2070Health, Innovaccer Analytics, Exponent Energy, wati.io, Lokal…
 - **SmartRecruiters**: +tens of India-heavy boards from seed + discovery; Swiggy,
   Freshworks, ixigo, Unacademy, HackerRank, Refyne, Lendingkart et al. enter the feed.
 - **Promotion**: ~415 boards start contributing their remote India-eligible roles.
 - **Remote path**: `remote_from_india` should move from 1 into the hundreds once
-  descriptions are available to classify.
+  descriptions are available to classify (and Workable's `workplace: remote` roles
+  carry India location directly).
 - **Freshness**: ~1,000 stale postings drop out on the next full run; median age falls.
+
+Rough combined ceiling: the active-job count should move from ~2,900 toward the
+5,000–7,000 range after the first full discovery run, with early-career finally in
+the several-hundreds rather than 114.
 
 ## Still open
 

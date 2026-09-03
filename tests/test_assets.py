@@ -38,7 +38,7 @@ def test_schema_has_required_filter_indexes_and_unique_source_key():
 
 def test_schema_widens_ats_constraint_for_new_platforms():
     schema = (ROOT / "app/schema.sql").read_text()
-    assert "smartrecruiters" in schema
+    assert "smartrecruiters" in schema and "workable" in schema
     # The idempotent migration block that widens an already-created constraint.
     assert "job_boards_ats_check" in schema
     assert "last_discovered_at" in schema
@@ -47,9 +47,9 @@ def test_schema_widens_ats_constraint_for_new_platforms():
 def test_extra_ats_platforms_are_wired_end_to_end():
     from app import sources
 
-    # main's filter validation and the dashboard source picker must both know it.
     main_src = (ROOT / "app/main.py").read_text()
-    assert '"smartrecruiters"' in main_src
     html = (ROOT / "app/static/index.html").read_text()
-    assert 'value="smartrecruiters"' in html
-    assert "smartrecruiters" in sources.EXTRA_ATS
+    for ats in ("smartrecruiters", "workable"):
+        assert f'"{ats}"' in main_src, f"{ats} missing from main.py VALID_ATS"
+        assert f'value="{ats}"' in html, f"{ats} missing from dashboard source picker"
+        assert ats in sources.EXTRA_ATS

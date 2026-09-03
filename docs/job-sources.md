@@ -26,12 +26,25 @@ what every board-grouping loop iterates.
 | **Greenhouse** | `https://boards-api.greenhouse.io/v1/boards/{slug}/jobs` | `payload["jobs"]` | **not** in list response — needs a per‑job call with `?content=true` |
 | **Lever** | `https://api.lever.co/v0/postings/{slug}?mode=json` | the response *is* the array | included in list response |
 | **SmartRecruiters** | `https://api.smartrecruiters.com/v1/companies/{slug}/postings?country=in` | `payload["content"]`, paginated by `offset` (100/page, capped at 1500) | **not** in list response — needs `GET .../postings/{id}` → `jobAd.sections.*.text` |
+| **Workable** | `https://jobs.workable.com/api/v1/jobs?location=india` — one shared feed, **not** per company | `payload["jobs"]`, paginated by `nextPageToken` (20/page, ~190 pages) | **inline** in the feed (`description`, full HTML) |
 
 SmartRecruiters is fetched India-only (`country=in`) — a global board like `BoschGroup`
 drops from ~4,800 postings to a few hundred. An unknown company slug returns HTTP 200
 with `totalFound: 0`, which the adapter treats as an exhaustive empty response (board
-kept, its jobs closed). See [coverage-analysis.md](coverage-analysis.md) for why
-Workable / Recruitee / Keka / Freshteam / Zoho Recruit were evaluated and deferred.
+kept, its jobs closed).
+
+**Workable is a feed, not a set of boards.** It is an embedded widget, so per-company
+boards are invisible to web archives and the widget endpoint is dead for most accounts.
+Instead `app/sources.py` pulls the whole `jobs.workable.com` India marketplace feed once
+per discovery run (`load_workable_feed`, ~3 min sequential with a 0.4 s inter-page
+delay — `jobs.workable.com` rate-limits bursts), groups jobs by company, and registers a
+`job_boards` row per company (`_prime_feed_sources`). Each Workable "board" is then
+served from that in-process cache with **no** per-board HTTP. A pull that does not reach
+the last page is discarded (`_workable_feed_ok` stays False) and every Workable board
+reports `unchanged` that sweep, so a rate-limited feed can never close a company's jobs.
+
+See [coverage-analysis.md](coverage-analysis.md) for why Recruitee / Keka / Freshteam /
+Zoho Recruit were evaluated and deferred.
 
 Each adapter provides:
 
@@ -91,12 +104,11 @@ gate withheld). Adding "or remote" fixed that — see
    "recent_discovery" | "full_discovery")` — an idempotent upsert into `job_boards`
    (`ON CONFLICT (ats, slug) DO UPDATE`). The function returns the net number of new
    board rows, recorded as `ingestion_runs.boards_discovered`.
-4. **Directed discovery** (`sources.discover_indian_boards`) — probe **every** ATS
-   endpoint (including SmartRecruiters) with slug candidates generated from
-   `data/indian-companies.json`. Slug guesses that resolve (HEAD 200 for the upstream
-   three; `totalFound > 0` for SmartRecruiters) are imported as `discovered_via =
-   "directed_india"`. This reaches boards no web archive captured and is where most
-   net‑new India coverage now comes from.
+4. **Directed discovery** (`sources.discover_indian_boards`) — probe each **per‑slug**
+   ATS endpoint (upstream three + SmartRecruiters; Workable is feed‑based and excluded)
+   with slug candidates generated from `data/indian-companies.json`. Slug guesses that
+   resolve (HEAD 200 for the upstream three; `totalFound > 0` for SmartRecruiters) are
+   imported as `discovered_via = "directed_india"`.
 5. **Dead-board resurrection** (`full_discovery` only) — every `is_active = false`
    board is re‑probed; one that now resolves is reactivated with
    `last_discovered_at = now()`. A transient 404 no longer removes a company forever.

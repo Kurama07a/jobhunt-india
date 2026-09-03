@@ -42,7 +42,8 @@ flowchart TD
     LOCK -- no --> FAILLOCK["run -> failed\n'another ingestion holds the database lock'"]
     LOCK -- yes --> RUNNING["run -> running, started_at = now()"]
     RUNNING --> SEED["ensure_seed_boards()\nupstream boards.seed.json + data/india-boards.seed.json"]
-    SEED --> DISC{"mode in {refresh_recent, full_discovery}?"}
+    SEED --> FEED["_prime_feed_sources(force = discovery mode)\npull jobs.workable.com India feed -> register a board per company\n(incremental reuses the cached feed)"]
+    FEED --> DISC{"mode in {refresh_recent, full_discovery}?"}
     DISC -- yes --> REFRESH["refresh_boards(mode)\n= write DB boards to cache\n+ upstream.load_boards(refresh=True)  (Wayback/urlscan)\n+ sources.discover_indian_boards()  (directed slug probing, all ATSes)\n+ full_discovery only: _resurrect_dead_boards()"]
     DISC -- no --> SKIPD[" "]
     REFRESH --> LOADB

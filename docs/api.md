@@ -86,7 +86,7 @@ The paginated, filterable feed. All parameters optional.
 | `levels` | CSV of `internship,entry,mid,senior,unknown` | `experience_level = ANY(...)`; unknown value → `422` |
 | `days` | int 1..3650 | `COALESCE(published_at, first_seen_at) >= now() - days` |
 | `remote` | bool | `is_remote = <value>` |
-| `ats` | CSV of `ashby,greenhouse,lever,smartrecruiters` | `ats = ANY(...)`; unknown value → `422` |
+| `ats` | CSV of `ashby,greenhouse,lever,smartrecruiters,workable` | `ats = ANY(...)`; unknown value → `422` |
 | `company` | string ≤ 180 | exact `company = <value>` |
 | `location` | string ≤ 180 | `location ILIKE '%<value>%'` |
 | `skills` | CSV ≤ 300 | `skills && ARRAY[...]` (overlap) |

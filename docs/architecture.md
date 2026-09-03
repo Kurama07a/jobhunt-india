@@ -98,10 +98,16 @@ known‑Indian‑company set (missing file is non‑fatal).
 
 ### Extra sources & directed discovery (`app/sources.py`)
 
-The native **SmartRecruiters** adapter (the upstream project covers only Ashby /
-Greenhouse / Lever) plus **directed discovery** — probing every ATS endpoint with slug
-candidates generated from `data/indian-companies.json` instead of waiting for a web
-archive to capture the board. Reuses `upstream.fetch` for the traffic contract. See
+Beyond the upstream three (Ashby / Greenhouse / Lever):
+
+- **SmartRecruiters** — a native per‑company adapter (pagination + `?country=in`).
+- **Workable** — a *feed* source: pull `jobs.workable.com/api/v1/jobs?location=india`
+  once per discovery run, cache by company, serve each board from cache. A truncated
+  pull is discarded so it can't close jobs.
+- **Directed discovery** — probe each per‑slug ATS endpoint with slug candidates from
+  `data/indian-companies.json` instead of waiting for a web archive.
+
+All reuse `upstream.fetch` for the User‑Agent / retry / backoff contract. See
 [coverage-analysis.md](coverage-analysis.md).
 
 ### Database access (`app/db.py`)

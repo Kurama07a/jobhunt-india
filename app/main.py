@@ -20,7 +20,7 @@ from app.ingestion import create_or_get_run, ensure_seed_boards, launch_ingestio
 
 STATIC_DIR = Path(__file__).with_name("static")
 VALID_LEVELS = {"internship", "entry", "mid", "senior", "unknown"}
-VALID_ATS = {"ashby", "greenhouse", "lever", "smartrecruiters"}
+VALID_ATS = {"ashby", "greenhouse", "lever", "smartrecruiters", "workable"}
 
 
 @asynccontextmanager

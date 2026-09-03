@@ -8,7 +8,7 @@ designed for `https://jobhunt.prakhar.wtf` and is refreshed by n8n.
 - Reuses Matt Herzog's MIT-licensed [`mherzog4/job-boards`](https://github.com/mherzog4/job-boards)
   discovery and public ATS adapters, pinned to commit
   `da7885cff552c513319318f2f31ed23f049f426e`.
-- Discovers and checks public Ashby, Greenhouse, Lever, and SmartRecruiters company
+- Discovers and checks public Ashby, Greenhouse, Lever, SmartRecruiters, and Workable company
   boards with a fixed maximum concurrency of 8 and an identifiable `JOB_SCRAPER_CONTACT`
   user agent. Beyond archive-based discovery, it probes ATS endpoints directly with slug
   guesses from a curated ~320-company Indian-employer roster

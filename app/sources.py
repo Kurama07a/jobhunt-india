@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 import urllib.parse
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -173,6 +174,132 @@ def _sr_probe(slug: str) -> bool:
     return isinstance(payload, dict) and int(payload.get("totalFound") or 0) > 0
 
 
+# --------------------------------------------------------------------------- #
+# Workable — public jobs marketplace, India-filtered feed
+#
+# Workable is an embedded widget, not a hosted careers domain, so its per-company
+# boards are invisible to web archives. But jobs.workable.com runs a public jobs
+# marketplace with a location filter and full descriptions inline. We pull that
+# whole India feed once per sweep, group by company, and serve each company from
+# the cache — so a Workable "board" fits the same fetch_records contract as the
+# others without any per-board HTTP.
+# --------------------------------------------------------------------------- #
+
+WORKABLE_FEED = "https://jobs.workable.com/api/v1/jobs?location=india"
+WORKABLE_MAX_PAGES = 400
+WORKABLE_PAGE_DELAY = 0.4  # be a good citizen; jobs.workable.com rate-limits bursts
+_WORKABLE_WORKPLACE = {"on_site": "On-site", "remote": "Remote", "hybrid": "Hybrid"}
+
+# company slug -> list of raw marketplace job dicts; None until the feed is pulled.
+_workable_cache: dict[str, list[dict[str, Any]]] | None = None
+_workable_titles: dict[str, str] = {}
+# True only after a pull that paginated all the way to the last page. While False,
+# a Workable board fetch reports "unchanged" so a truncated/failed feed can never
+# close a company's jobs.
+_workable_feed_ok: bool = False
+
+
+def _wk_slug(job: dict[str, Any]) -> str:
+    company = job.get("company") or {}
+    url = company.get("url") or ""
+    match = re.search(r"jobs-at-(.+)$", url)
+    raw = urllib.parse.unquote(match.group(1)) if match else (company.get("id") or "")
+    return re.sub(r"[^a-z0-9._-]+", "-", raw.lower()).strip("-")[:60]
+
+
+def _wk_normalize(job: dict[str, Any]) -> dict[str, Any] | None:
+    jid = str(job.get("id") or "")
+    if not jid:
+        return None
+    loc = job.get("location") or {}
+    locs = [x for x in (job.get("locations") or []) if isinstance(x, str)]
+    location = locs[0] if locs else ", ".join(
+        p for p in (loc.get("city"), loc.get("subregion"), loc.get("countryName")) if p
+    )
+    workplace = job.get("workplace") or ""
+    company = job.get("company") or {}
+    return {
+        "id": jid,
+        "title": job.get("title") or "",
+        "department": job.get("department") or "",
+        "team": "",
+        "employmentType": job.get("employmentType") or "",
+        "location": location,
+        "isRemote": workplace == "remote",
+        "workplaceType": _WORKABLE_WORKPLACE.get(workplace, ""),
+        "publishedAt": job.get("created") or job.get("updated") or "",
+        "jobUrl": job.get("url") or "",
+        "_description": job.get("description") or "",
+        "_company_name": company.get("title") or "",
+    }
+
+
+def load_workable_feed(force: bool = False) -> dict[str, str]:
+    """Pull the whole India Workable marketplace feed and cache it by company slug.
+
+    Idempotent within a process unless ``force``. Returns slug -> company display
+    title. A new cache is committed **only** if pagination reached the last page —
+    a truncated pull (rate limit, network) leaves the previous cache untouched and
+    ``_workable_feed_ok`` False, so no Workable jobs get closed on bad data.
+    """
+    global _workable_cache, _workable_feed_ok
+    if _workable_cache is not None and not force:
+        return dict(_workable_titles)
+
+    cache: dict[str, list[dict[str, Any]]] = {}
+    titles: dict[str, str] = {}
+    token: str | None = None
+    completed = False
+    for _ in range(WORKABLE_MAX_PAGES):
+        url = WORKABLE_FEED + (f"&pageToken={urllib.parse.quote(token)}" if token else "")
+        try:
+            payload = json.loads(_upstream.fetch(url, timeout=25, retries=5))
+        except Exception:
+            break  # incomplete — fall through without committing
+        if not isinstance(payload, dict):
+            break
+        for job in payload.get("jobs") or []:
+            if not isinstance(job, dict):
+                continue
+            slug = _wk_slug(job)
+            if not slug or not _upstream.plausible(slug, "workable"):
+                continue
+            cache.setdefault(slug, []).append(job)
+            titles[slug] = (job.get("company") or {}).get("title") or slug
+        token = payload.get("nextPageToken")
+        if not token:
+            completed = True
+            break
+        time.sleep(WORKABLE_PAGE_DELAY)
+
+    if completed and cache:
+        _workable_cache = cache
+        _workable_titles.clear()
+        _workable_titles.update(titles)
+        _workable_feed_ok = True
+    elif _workable_cache is None:
+        _workable_cache = {}  # first-ever pull failed; register no boards
+        _workable_feed_ok = False
+    return dict(_workable_titles)
+
+
+def _wk_fetch_records(board: dict[str, Any], use_etag: bool) -> dict[str, Any]:
+    if _workable_cache is None:
+        load_workable_feed()
+    if not _workable_feed_ok:
+        # No trustworthy feed this run — leave the board's jobs exactly as they are.
+        return {"status": "unchanged"}
+    raw = (_workable_cache or {}).get(board["slug"], [])
+    normalized = [n for job in raw if (n := _wk_normalize(job))]
+    return {"status": "ok", "normalized": normalized, "etag": None}
+
+
+def _wk_probe(slug: str) -> bool:
+    if _workable_cache is None:
+        load_workable_feed()
+    return bool(_workable_feed_ok) and slug in (_workable_cache or {})
+
+
 # Registered platforms beyond the upstream three. `fetch_records` yields the
 # same normalized shape the upstream normalize pass produces; `describe` fills a
 # missing description for a promising posting; `probe` validates a slug guess.
@@ -182,6 +309,13 @@ EXTRA_ATS: dict[str, dict[str, Any]] = {
         "describe": _sr_describe,
         "probe": _sr_probe,
         "domains": ["jobs.smartrecruiters.com", "careers.smartrecruiters.com"],
+    },
+    "workable": {
+        "fetch_records": _wk_fetch_records,
+        "describe": lambda *_: "",  # descriptions are inline in the feed
+        "probe": _wk_probe,
+        "domains": ["apply.workable.com", "jobs.workable.com"],
+        "feed": load_workable_feed,  # primed once per sweep by ingestion
     },
 }
 

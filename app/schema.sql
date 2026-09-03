@@ -8,7 +8,7 @@ CREATE TABLE IF NOT EXISTS schema_meta (
 );
 
 CREATE TABLE IF NOT EXISTS job_boards (
-    ats text NOT NULL CHECK (ats IN ('ashby', 'greenhouse', 'lever', 'smartrecruiters')),
+    ats text NOT NULL CHECK (ats IN ('ashby', 'greenhouse', 'lever', 'smartrecruiters', 'workable')),
     slug text NOT NULL,
     display_name text NOT NULL,
     is_india_company boolean NOT NULL DEFAULT false,
@@ -27,7 +27,7 @@ CREATE TABLE IF NOT EXISTS job_boards (
 
 CREATE TABLE IF NOT EXISTS jobs (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    ats text NOT NULL CHECK (ats IN ('ashby', 'greenhouse', 'lever', 'smartrecruiters')),
+    ats text NOT NULL CHECK (ats IN ('ashby', 'greenhouse', 'lever', 'smartrecruiters', 'workable')),
     source_job_id text NOT NULL,
     board_slug text NOT NULL,
     company text NOT NULL,
@@ -128,35 +128,33 @@ CREATE INDEX IF NOT EXISTS ingestion_runs_requested_idx
 
 -- Widen the ats CHECK constraints to cover platforms added after v1. CREATE TABLE
 -- IF NOT EXISTS never alters a table that already exists, so a running database
--- keeps its original 3-value constraint until this runs.
+-- keeps its original constraint until this runs. Target-list driven: to add a
+-- platform, extend `want` and bump schema_version — the block re-derives both
+-- constraints to match and is a no-op once they already do.
 DO $$
-DECLARE c record;
+DECLARE
+    want text := 'ats IN (''ashby'', ''greenhouse'', ''lever'', ''smartrecruiters'', ''workable'')';
+    c record;
 BEGIN
     FOR c IN
-        SELECT conrelid::regclass AS tbl, conname
+        SELECT conrelid::regclass AS tbl, conname, pg_get_constraintdef(oid) AS def
         FROM pg_constraint
         WHERE contype = 'c'
             AND conrelid IN ('job_boards'::regclass, 'jobs'::regclass)
-            AND pg_get_constraintdef(oid) ILIKE '%ats%'
-            AND pg_get_constraintdef(oid) NOT ILIKE '%smartrecruiters%'
+            AND conname IN ('job_boards_ats_check', 'jobs_ats_check')
     LOOP
-        EXECUTE format('ALTER TABLE %s DROP CONSTRAINT %I', c.tbl, c.conname);
+        IF position('workable' IN c.def) = 0 THEN
+            EXECUTE format('ALTER TABLE %s DROP CONSTRAINT %I', c.tbl, c.conname);
+        END IF;
     END LOOP;
 
-    IF NOT EXISTS (
-        SELECT 1 FROM pg_constraint
-        WHERE conname = 'job_boards_ats_check' AND conrelid = 'job_boards'::regclass
-    ) THEN
-        ALTER TABLE job_boards ADD CONSTRAINT job_boards_ats_check
-            CHECK (ats IN ('ashby', 'greenhouse', 'lever', 'smartrecruiters'));
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint
+        WHERE conname = 'job_boards_ats_check' AND conrelid = 'job_boards'::regclass) THEN
+        EXECUTE 'ALTER TABLE job_boards ADD CONSTRAINT job_boards_ats_check CHECK (' || want || ')';
     END IF;
-
-    IF NOT EXISTS (
-        SELECT 1 FROM pg_constraint
-        WHERE conname = 'jobs_ats_check' AND conrelid = 'jobs'::regclass
-    ) THEN
-        ALTER TABLE jobs ADD CONSTRAINT jobs_ats_check
-            CHECK (ats IN ('ashby', 'greenhouse', 'lever', 'smartrecruiters'));
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint
+        WHERE conname = 'jobs_ats_check' AND conrelid = 'jobs'::regclass) THEN
+        EXECUTE 'ALTER TABLE jobs ADD CONSTRAINT jobs_ats_check CHECK (' || want || ')';
     END IF;
 END $$;
 
@@ -165,6 +163,6 @@ END $$;
 ALTER TABLE job_boards ADD COLUMN IF NOT EXISTS last_discovered_at timestamptz;
 
 INSERT INTO schema_meta (key, value)
-VALUES ('schema_version', '2')
+VALUES ('schema_version', '3')
 ON CONFLICT (key) DO UPDATE
 SET value = excluded.value, updated_at = now();

@@ -61,6 +61,97 @@ def test_smartrecruiters_normalizer_marks_remote():
     assert norm["workplaceType"] == "Remote"
 
 
+def test_workable_is_a_registered_feed_source():
+    entry = sources.EXTRA_ATS["workable"]
+    assert callable(entry["fetch_records"])
+    assert callable(entry["probe"])
+    assert callable(entry.get("feed")), "workable must expose a feed primer"
+
+
+def test_workable_slug_is_taken_from_the_company_url():
+    job = {
+        "id": "x",
+        "company": {"title": "Proximity Works", "id": "abc",
+                    "url": "https://jobs.workable.com/company/xxx/jobs-at-proximity-works"},
+    }
+    assert sources._wk_slug(job) == "proximity-works"
+    # falls back to company id when the url has no jobs-at segment
+    assert sources._wk_slug({"id": "y", "company": {"id": "raw.id", "url": ""}}) == "raw.id"
+
+
+def test_workable_normalizer_maps_fields_and_remote():
+    job = {
+        "id": "j1", "title": "Backend Engineer", "department": "Engineering",
+        "employmentType": "Full-time", "workplace": "remote",
+        "locations": ["Bengaluru, Karnataka, India"],
+        "location": {"city": "Bengaluru", "subregion": "Karnataka", "countryName": "India"},
+        "created": "2026-08-20T00:00:00.000Z",
+        "url": "https://jobs.workable.com/view/abc/backend-engineer-at-acme",
+        "description": "<p>Build APIs</p>",
+        "company": {"title": "Acme"},
+    }
+    norm = sources._wk_normalize(job)
+    assert norm["id"] == "j1"
+    assert norm["title"] == "Backend Engineer"
+    assert norm["isRemote"] is True
+    assert norm["workplaceType"] == "Remote"
+    assert norm["location"] == "Bengaluru, Karnataka, India"
+    assert norm["_description"] == "<p>Build APIs</p>"
+    assert norm["publishedAt"].startswith("2026-08-20")
+
+
+def test_workable_feed_pages_and_caches(monkeypatch):
+    pages = [
+        {"jobs": [{"id": "1", "title": "SWE", "company": {"title": "A", "url": ".../jobs-at-acme"}}],
+         "nextPageToken": "tok2"},
+        {"jobs": [{"id": "2", "title": "SRE", "company": {"title": "A", "url": ".../jobs-at-acme"}},
+                  {"id": "3", "title": "PM", "company": {"title": "B", "url": ".../jobs-at-beta"}}],
+         "nextPageToken": None},
+    ]
+    calls = {"n": 0}
+
+    class FakeUpstream:
+        NotModified = NotFound = Exception
+        def fetch(self, url, **kw):
+            import json as _j
+            i = calls["n"]; calls["n"] += 1
+            return _j.dumps(pages[i]).encode()
+        def plausible(self, slug, ats):
+            return True
+
+    monkeypatch.setattr(sources, "_upstream", FakeUpstream())
+    monkeypatch.setattr(sources, "_workable_cache", None)
+    monkeypatch.setattr(sources, "_workable_feed_ok", False)
+    monkeypatch.setattr(sources, "WORKABLE_PAGE_DELAY", 0)
+    sources._workable_titles.clear()
+
+    titles = sources.load_workable_feed(force=True)
+    assert calls["n"] == 2, "should follow nextPageToken then stop"
+    assert set(titles) == {"acme", "beta"}
+    assert sources._workable_feed_ok is True
+    assert sources._wk_probe("acme") is True
+    assert sources._wk_probe("nope") is False
+    rec = sources._wk_fetch_records({"ats": "workable", "slug": "acme"}, False)
+    assert rec["status"] == "ok" and len(rec["normalized"]) == 2
+
+
+def test_workable_truncated_feed_does_not_commit_or_close_jobs(monkeypatch):
+    class FailingUpstream:
+        NotModified = NotFound = Exception
+        def fetch(self, url, **kw):
+            raise RuntimeError("429 throttled")
+        def plausible(self, slug, ats):
+            return True
+
+    monkeypatch.setattr(sources, "_upstream", FailingUpstream())
+    monkeypatch.setattr(sources, "_workable_cache", None)
+    monkeypatch.setattr(sources, "_workable_feed_ok", False)
+    sources.load_workable_feed(force=True)
+    assert sources._workable_feed_ok is False
+    # A board fetch must report "unchanged" so persist leaves its jobs alone.
+    assert sources._wk_fetch_records({"ats": "workable", "slug": "acme"}, False)["status"] == "unchanged"
+
+
 def test_curated_company_file_is_valid_and_substantial():
     payload = json.loads((ROOT / "data" / "indian-companies.json").read_text())
     companies = payload["companies"]
