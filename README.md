@@ -98,6 +98,13 @@ python -m app.cli reclassify  # apply classifier updates without refetching boar
 - `POST /api/admin/ingest` — token-protected ingestion start
 - `GET /api/admin/runs/{id}` — token-protected ingestion run status
 
+## Documentation
+
+Full documentation lives in [`docs/`](docs/README.md): system architecture, job sources
+and discovery, end-to-end data flow, the classifier, the database schema, the HTTP API
+reference, n8n orchestration, the CI/CD pipeline, the dashboard, and an operations
+runbook.
+
 ## Attribution
 
 The upstream `job-boards` source is copied into the production image from its pinned
