@@ -20,7 +20,7 @@ from app.ingestion import create_or_get_run, ensure_seed_boards, launch_ingestio
 
 STATIC_DIR = Path(__file__).with_name("static")
 VALID_LEVELS = {"internship", "entry", "mid", "senior", "unknown"}
-VALID_ATS = {"ashby", "greenhouse", "lever"}
+VALID_ATS = {"ashby", "greenhouse", "lever", "smartrecruiters"}
 
 
 @asynccontextmanager
@@ -374,3 +374,83 @@ def ingestion_status(
     if not row:
         raise HTTPException(status_code=404, detail="ingestion run not found")
     return row
+
+
+@app.get("/api/admin/coverage")
+def coverage(
+    x_ingest_token: str | None = Header(None, alias="X-Ingest-Token"),
+) -> dict:
+    """The discovery -> classification funnel, for spotting where coverage leaks."""
+    _verify_admin(x_ingest_token)
+    boards = fetch_one(
+        """
+        SELECT
+            count(*) AS total,
+            count(*) FILTER (WHERE is_active) AS active,
+            count(*) FILTER (WHERE is_india_company) AS india_company,
+            count(*) FILTER (WHERE NOT is_active) AS dead,
+            count(*) FILTER (WHERE consecutive_failures > 0) AS failing,
+            count(*) FILTER (WHERE last_discovered_at IS NOT NULL) AS directed_confirmed
+        FROM job_boards
+        """
+    )
+    by_ats = fetch_all(
+        """
+        SELECT b.ats,
+            count(*) FILTER (WHERE b.is_active) AS boards,
+            count(*) FILTER (WHERE b.is_india_company) AS india_company_boards,
+            COALESCE(j.productive_boards, 0) AS productive_boards,
+            COALESCE(j.active_jobs, 0) AS active_jobs
+        FROM job_boards b
+        LEFT JOIN (
+            SELECT ats,
+                count(DISTINCT board_slug) AS productive_boards,
+                count(*) AS active_jobs
+            FROM jobs WHERE is_active GROUP BY ats
+        ) j ON j.ats = b.ats
+        GROUP BY b.ats, j.productive_boards, j.active_jobs
+        ORDER BY b.ats
+        """
+    )
+    jobs = fetch_one(
+        """
+        SELECT
+            count(*) FILTER (WHERE is_active) AS active,
+            count(*) FILTER (WHERE is_active AND experience_level IN ('internship', 'entry')) AS early_career,
+            count(*) FILTER (WHERE is_active AND is_remote) AS remote,
+            count(*) FILTER (WHERE is_active AND COALESCE(published_at, first_seen_at) >= now() - interval '30 days') AS fresh_30d,
+            count(*) FILTER (WHERE is_active AND COALESCE(published_at, first_seen_at) < now() - interval '90 days') AS older_90d,
+            percentile_cont(0.5) WITHIN GROUP (
+                ORDER BY extract(epoch FROM now() - COALESCE(published_at, first_seen_at)) / 86400
+            ) FILTER (WHERE is_active) AS median_age_days
+        FROM jobs
+        """
+    )
+    by_reason = fetch_all(
+        """
+        SELECT india_match_reason AS reason, count(*) AS count
+        FROM jobs WHERE is_active
+        GROUP BY india_match_reason ORDER BY count DESC
+        """
+    )
+    by_level = fetch_all(
+        """
+        SELECT experience_level AS level, count(*) AS count
+        FROM jobs WHERE is_active
+        GROUP BY experience_level ORDER BY count DESC
+        """
+    )
+    discovery_trend = fetch_all(
+        """
+        SELECT mode, status, requested_at, boards_discovered, jobs_targeted
+        FROM ingestion_runs ORDER BY requested_at DESC LIMIT 12
+        """
+    )
+    return {
+        "boards": boards,
+        "boards_by_ats": by_ats,
+        "jobs": jobs,
+        "jobs_by_india_match_reason": by_reason,
+        "jobs_by_experience_level": by_level,
+        "recent_runs": discovery_trend,
+    }

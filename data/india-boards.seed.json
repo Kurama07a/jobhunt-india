@@ -1,15 +1,43 @@
 {
-  "ashby": [],
+  "ashby": [
+    "atlan",
+    "navi",
+    "sarvam"
+  ],
   "greenhouse": [
     "groww",
     "postman",
     "razorpaysoftwareprivatelimited",
-    "slice"
+    "slice",
+    "inmobi",
+    "glance",
+    "hackerrank",
+    "druva",
+    "observeai",
+    "turing"
   ],
   "lever": [
     "cred",
     "meesho",
-    "mindtickle"
+    "mindtickle",
+    "paytm",
+    "zeta",
+    "porter",
+    "freshworks"
+  ],
+  "smartrecruiters": [
+    "Swiggy",
+    "Freshworks",
+    "ixigo",
+    "Unacademy",
+    "Cars24",
+    "Upstox",
+    "Whatfix",
+    "Lendingkart",
+    "Refyne",
+    "MindTickle",
+    "HackerRank",
+    "RebelFoods"
   ]
 }
 

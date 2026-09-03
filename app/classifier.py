@@ -5,6 +5,7 @@ import json
 import re
 from dataclasses import dataclass
 from html import unescape
+from pathlib import Path
 from typing import Any
 
 
@@ -79,7 +80,19 @@ _REMOTE_INDIA_ELIGIBILITY_RE = re.compile(
     rf"\bremote(?:\s+(?:role|position|job|opportunity))?\s*(?:[-–—,:/]\s*|in\s+)"
     rf"{_INDIA_TERM_PATTERN}\b|"
     rf"\b{_INDIA_TERM_PATTERN}\b\s*(?:[-–—,:/]\s*)?"
-    rf"(?:remote|only|based|residents?|candidates?|applicants?|location)\b"
+    rf"(?:remote|only|based|residents?|candidates?|applicants?|location)\b|"
+    # "India-based", "India based role", "Pan-India", "anywhere in India"
+    rf"\b{_INDIA_TERM_PATTERN}[- ]based\b|"
+    rf"\bpan[- ]?india\b|"
+    rf"\banywhere\s+(?:in|across|within)\s+{_INDIA_TERM_PATTERN}\b|"
+    # "hiring in India", "hiring remotely across India", "team is in India"
+    rf"\bhiring\s+(?:remotely\s+)?(?:across|from|in|throughout|within)\s+{_INDIA_TERM_PATTERN}\b|"
+    # "eligible / authorised / legally able to work in India", "must reside in India"
+    rf"\b(?:eligible|authoriz(?:ed|ation)|legally\s+(?:able|entitled))\s+to\s+work\s+in\s+"
+    rf"{_INDIA_TERM_PATTERN}\b|"
+    rf"\bmust\s+(?:reside|be\s+located|be\s+based)\s+in\s+{_INDIA_TERM_PATTERN}\b|"
+    # "role is based out of India", "position based out of Bengaluru"
+    rf"\bbased\s+out\s+of\s+{_INDIA_TERM_PATTERN}\b"
     rf")",
     re.IGNORECASE,
 )
@@ -145,8 +158,32 @@ INDIAN_COMPANY_HINTS = {
     "zerodha",
     "zomato",
 }
+def _load_curated_company_slugs() -> set[str]:
+    """Merge data/indian-companies.json slug hints into the bootstrap set.
+
+    The file is a maintained, ~hundreds-long roster of Indian software employers.
+    Missing or malformed file is not fatal — the built-in bootstrap set stands on
+    its own, and location evidence still promotes boards during scans.
+    """
+    path = Path(__file__).resolve().parents[1] / "data" / "indian-companies.json"
+    slugs: set[str] = set()
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return slugs
+    for entry in payload.get("companies", []):
+        if not isinstance(entry, dict):
+            continue
+        for slug in entry.get("slugs", []) or []:
+            if isinstance(slug, str) and slug.strip():
+                slugs.add(slug)
+    return slugs
+
+
 NORMALIZED_INDIAN_COMPANY_HINTS = {
-    re.sub(r"[^a-z0-9]", "", hint.lower()) for hint in INDIAN_COMPANY_HINTS
+    re.sub(r"[^a-z0-9]", "", hint.lower())
+    for hint in INDIAN_COMPANY_HINTS | _load_curated_company_slugs()
+    if re.sub(r"[^a-z0-9]", "", hint.lower())
 }
 
 SOFTWARE_TITLE_RE = re.compile(

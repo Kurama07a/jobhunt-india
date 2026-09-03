@@ -167,3 +167,44 @@ def test_inr_lpa_salary_is_normalized_to_annual_rupees():
 
 def test_company_display_name_is_readable():
     assert display_company("example-company") == "Example Company"
+
+
+def test_curated_company_roster_extends_the_known_indian_set():
+    # Names present in data/indian-companies.json but not the built-in bootstrap set.
+    assert is_known_indian_company("inmobi")
+    assert is_known_indian_company("hackerrank")
+    assert is_known_indian_company("zeta")
+    assert not is_known_indian_company("someunlistedforeignco")
+
+
+def test_remote_gate_accepts_more_real_india_eligibility_phrasings():
+    for copy in (
+        "This is an India-based remote position.",
+        "We hire Pan-India, fully remote.",
+        "Open to applicants anywhere in India.",
+        "We are hiring remotely across India.",
+        "You must be eligible to work in India.",
+        "The role is based out of Bengaluru.",
+    ):
+        result = classify_job(
+            title="Software Engineer",
+            description=copy,
+            location="Remote",
+            board_slug="unlisted",
+            board_is_india=False,
+            is_remote=True,
+        )
+        assert result.is_target, copy
+        assert result.india_match_reason == "remote_from_india"
+
+
+def test_generic_india_mention_still_rejected_for_overseas_remote_role():
+    result = classify_job(
+        title="Software Engineer",
+        description="A global team with an office in India among many others.",
+        location="Remote - US",
+        board_slug="unlisted",
+        board_is_india=False,
+        is_remote=True,
+    )
+    assert not result.is_target

@@ -93,6 +93,16 @@ the HTTP request that triggered it returns `202 Accepted`.
 
 Pure, dependency‑free, deterministic functions — no I/O, no model calls. Regex and
 keyword rules only. Fully unit‑tested. See [classification.md](classification.md).
+On import it merges the slug hints from `data/indian-companies.json` into its
+known‑Indian‑company set (missing file is non‑fatal).
+
+### Extra sources & directed discovery (`app/sources.py`)
+
+The native **SmartRecruiters** adapter (the upstream project covers only Ashby /
+Greenhouse / Lever) plus **directed discovery** — probing every ATS endpoint with slug
+candidates generated from `data/indian-companies.json` instead of waiting for a web
+archive to capture the board. Reuses `upstream.fetch` for the traffic contract. See
+[coverage-analysis.md](coverage-analysis.md).
 
 ### Database access (`app/db.py`)
 

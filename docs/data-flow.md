@@ -43,7 +43,7 @@ flowchart TD
     LOCK -- yes --> RUNNING["run -> running, started_at = now()"]
     RUNNING --> SEED["ensure_seed_boards()\nupstream boards.seed.json + data/india-boards.seed.json"]
     SEED --> DISC{"mode in {refresh_recent, full_discovery}?"}
-    DISC -- yes --> REFRESH["refresh_boards(mode)\n= write DB boards to cache\n+ upstream.load_boards(refresh=True)\n+ import new slugs"]
+    DISC -- yes --> REFRESH["refresh_boards(mode)\n= write DB boards to cache\n+ upstream.load_boards(refresh=True)  (Wayback/urlscan)\n+ sources.discover_indian_boards()  (directed slug probing, all ATSes)\n+ full_discovery only: _resurrect_dead_boards()"]
     DISC -- no --> SKIPD[" "]
     REFRESH --> LOADB
     SKIPD --> LOADB["SELECT active boards\nORDER BY ats, lower(slug)"]
@@ -59,7 +59,8 @@ flowchart TD
     TICK -- no --> CONT[" "]
     UPD --> DONE
     CONT --> DONE{"all boards done?"}
-    DONE -- yes --> COMPLETE["run -> completed, finished_at = now(), error = NULL"]
+    DONE -- yes --> POST["post-sweep:\n_promote_india_companies()  (every run)\nfull_discovery only: _close_stale_jobs()  (>120d)"]
+    POST --> COMPLETE["run -> completed, finished_at = now(), error = NULL"]
     POOL -. any unhandled exception .-> FAILRUN["run -> failed, error = <exc>"]
     COMPLETE --> UNLOCK["pg_advisory_unlock(4912024091)"]
     FAILRUN --> UNLOCK
@@ -141,11 +142,14 @@ stateDiagram-v2
     Active --> Closed: successful board response omits it
     Active --> Closed: board returns 404 (dead)
     Active --> Closed: reclassify decides it is no longer a target
+    Active --> Closed: full_discovery + published_at older than 120d (_close_stale_jobs)
     Closed --> Active: seen again in a later successful response (closed_at -> NULL)
 ```
 
 **Only a successful, exhaustive response closes a job.** Network errors and parse errors
-leave jobs untouched — the guiding principle is *never close on uncertainty*.
+leave jobs untouched — the guiding principle is *never close on uncertainty*. The
+120‑day stale close is the one exception, and runs only on the monthly unconditional
+sweep where every live posting was just re‑confirmed.
 
 ## Terminal state & what the dashboard reads
 

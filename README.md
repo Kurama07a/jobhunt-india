@@ -8,8 +8,11 @@ designed for `https://jobhunt.prakhar.wtf` and is refreshed by n8n.
 - Reuses Matt Herzog's MIT-licensed [`mherzog4/job-boards`](https://github.com/mherzog4/job-boards)
   discovery and public ATS adapters, pinned to commit
   `da7885cff552c513319318f2f31ed23f049f426e`.
-- Discovers and checks public Ashby, Greenhouse, and Lever company boards with a fixed
-  maximum concurrency of 8 and an identifiable `JOB_SCRAPER_CONTACT` user agent.
+- Discovers and checks public Ashby, Greenhouse, Lever, and SmartRecruiters company
+  boards with a fixed maximum concurrency of 8 and an identifiable `JOB_SCRAPER_CONTACT`
+  user agent. Beyond archive-based discovery, it probes ATS endpoints directly with slug
+  guesses from a curated ~320-company Indian-employer roster
+  (`data/indian-companies.json`).
 - Keeps India-located software roles plus software roles from recognized Indian-company
   boards. Geography-neutral remote roles require explicit India eligibility in the job
   copy, preventing overseas office roles with generic India mentions from leaking into
@@ -97,6 +100,7 @@ python -m app.cli reclassify  # apply classifier updates without refetching boar
 - `GET /api/sync-status` — safe public sync progress
 - `POST /api/admin/ingest` — token-protected ingestion start
 - `GET /api/admin/runs/{id}` — token-protected ingestion run status
+- `GET /api/admin/coverage` — token-protected discovery→classification funnel
 
 ## Documentation
 

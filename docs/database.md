@@ -4,6 +4,12 @@ PostgreSQL is the single source of truth. The full schema is `app/schema.sql`, a
 idempotently on every process start by `open_pool()` (`app/db.py:24`). Extensions:
 `pgcrypto` (for `gen_random_uuid()`) and `pg_trgm` (trigram indexes).
 
+`schema.sql` ends with an idempotent migration block (`schema_version` is now `2`): a
+`DO $$ … $$` that widens the `ats` CHECK constraints on `job_boards` and `jobs` to
+include `smartrecruiters` (a bare `CREATE TABLE IF NOT EXISTS` never alters an existing
+table), and `ALTER TABLE … ADD COLUMN IF NOT EXISTS last_discovered_at`. Safe to run on
+every boot; validated against the production DB inside a rolled-back transaction.
+
 Connection pool (`app/db.py`): `psycopg_pool.ConnectionPool`, `min_size=1`,
 `max_size=12`, `timeout=20s`, `autocommit=True`, `row_factory=dict_row`.
 
@@ -11,7 +17,7 @@ Connection pool (`app/db.py`): `psycopg_pool.ConnectionPool`, `min_size=1`,
 
 ## `schema_meta`
 
-Key/value table. Currently holds `schema_version = '1'`. `/health` reads it to prove the
+Key/value table. Currently holds `schema_version = '2'`. `/health` reads it to prove the
 schema is present.
 
 | Column | Type | Notes |
@@ -28,7 +34,7 @@ One row per discovered company board. PK is `(ats, slug)`.
 
 | Column | Type | Meaning |
 |---|---|---|
-| `ats` | `text` | `ashby` \| `greenhouse` \| `lever` (CHECK) |
+| `ats` | `text` | `ashby` \| `greenhouse` \| `lever` \| `smartrecruiters` (CHECK) |
 | `slug` | `text` | vendor board identifier (the `{slug}` in the API URL) |
 | `display_name` | `text` | human name, from `display_company(slug)` |
 | `is_india_company` | `bool` | recognised Indian company. **Sticky** — only ever OR‑ed to true |
@@ -40,10 +46,13 @@ One row per discovered company board. PK is `(ats, slug)`.
 | `last_error` | `text` | last failure text; cleared on success |
 | `consecutive_failures` | `int` | incremented on error/dead, reset to 0 on success |
 | `jobs_seen` | `int` | normalized postings in the last successful response |
+| `last_discovered_at` | `timestamptz` \| null | last time a directed probe confirmed the slug (schema v2). Set when a dead board is resurrected. |
 | `created_at` / `updated_at` | `timestamptz` | |
 
 Indexes: `job_boards_active_idx (is_active, ats, slug)`,
 `job_boards_india_idx (is_india_company) WHERE is_india_company`.
+
+`discovered_via` also takes `directed_india` (slug-probe hit) since schema v2.
 
 ---
 

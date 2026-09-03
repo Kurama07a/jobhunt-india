@@ -22,6 +22,7 @@ from app.classifier import (
     location_is_india,
     plain_text,
 )
+from app import sources
 from app.config import settings
 from app.db import fetch_all, fetch_one, pool
 
@@ -30,6 +31,10 @@ ADVISORY_LOCK_ID = 4_912_024_091
 ALLOWED_MODES = {"incremental", "refresh_recent", "full_discovery", "smoke"}
 PROGRESS_INTERVAL = 25
 MAX_DESCRIPTION_LENGTH = 60_000
+# Close an active job whose board response has not mentioned it in this long, even
+# while the board itself keeps answering. Guards against evergreen/pipeline reqs
+# that a board never removes. Only applied on unconditional (non-ETag) sweeps.
+STALE_JOB_DAYS = 120
 
 
 def _load_upstream():
@@ -48,6 +53,11 @@ def _load_upstream():
 
 
 upstream = _load_upstream()
+sources.bind_upstream(upstream)
+
+# Every ATS this service can ingest: the upstream three plus natively-handled
+# platforms. Used wherever board rows are grouped or seeded by platform.
+ALL_ATS: tuple[str, ...] = (*upstream.SOURCES.keys(), *sources.EXTRA_ATS.keys())
 
 
 def _parse_timestamp(value: str | None) -> datetime | None:
@@ -71,7 +81,7 @@ def _description_excerpt(description: str, length: int = 420) -> str:
 
 def import_boards_payload(payload: dict[str, list[str]], discovered_via: str) -> int:
     rows: list[dict[str, Any]] = []
-    for ats in upstream.SOURCES:
+    for ats in ALL_ATS:
         for slug in payload.get(ats, []):
             if not isinstance(slug, str) or not upstream.plausible(slug, ats):
                 continue
@@ -126,26 +136,87 @@ def _write_upstream_cache_from_db() -> None:
     rows = fetch_all(
         "SELECT ats, slug FROM job_boards WHERE is_active ORDER BY ats, lower(slug)"
     )
-    payload = {ats: [] for ats in upstream.SOURCES}
+    payload: dict[str, list[str]] = {ats: [] for ats in ALL_ATS}
     for row in rows:
-        payload[row["ats"]].append(row["slug"])
+        payload.setdefault(row["ats"], []).append(row["slug"])
     cache_path = Path(upstream.__file__).with_name("boards.json")
-    cache_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    # The upstream cache only understands its own three platforms; keep extra-ATS
+    # slugs out of the file it rewrites during discovery.
+    upstream_payload = {ats: payload.get(ats, []) for ats in upstream.SOURCES}
+    cache_path.write_text(json.dumps(upstream_payload, indent=2), encoding="utf-8")
+
+
+def _known_slugs_by_ats() -> dict[str, set[str]]:
+    rows = fetch_all("SELECT ats, lower(slug) AS slug FROM job_boards")
+    known: dict[str, set[str]] = {}
+    for row in rows:
+        known.setdefault(row["ats"], set()).add(row["slug"])
+    return known
 
 
 def refresh_boards(mode: str) -> int:
     _write_upstream_cache_from_db()
     recent = mode == "refresh_recent"
+    before = fetch_one("SELECT count(*) AS count FROM job_boards")["count"]
+
+    # 1. Archive-based discovery for the upstream three (Wayback + urlscan).
     payload = upstream.load_boards(
         refresh=True,
         ats_list=list(upstream.SOURCES),
         concurrency=settings.max_workers,
         recent=recent,
     )
-    before = fetch_one("SELECT count(*) AS count FROM job_boards")["count"]
     import_boards_payload(payload, "recent_discovery" if recent else "full_discovery")
+
+    # 2. Directed discovery: probe every ATS (including SmartRecruiters) with slug
+    #    guesses from the curated Indian-company roster. This reaches boards no web
+    #    archive has captured, and is where most net-new India coverage comes from.
+    directed = sources.discover_indian_boards(
+        known=_known_slugs_by_ats(),
+        ats_list=ALL_ATS,
+        concurrency=settings.max_workers,
+    )
+    if directed:
+        import_boards_payload(directed, "directed_india")
+
+    # 3. Resurrect boards that 404'd on a previous sweep — a transient outage or a
+    #    briefly-empty board should not remove a company permanently. Only on the
+    #    monthly full run, and only if a directed probe now confirms the slug.
+    resurrected = 0
+    if mode == "full_discovery":
+        resurrected = _resurrect_dead_boards()
+
     after = fetch_one("SELECT count(*) AS count FROM job_boards")["count"]
-    return max(0, after - before)
+    return max(0, after - before) + resurrected
+
+
+def _resurrect_dead_boards() -> int:
+    dead = fetch_all(
+        "SELECT ats, slug FROM job_boards WHERE NOT is_active ORDER BY ats, slug"
+    )
+    revived: list[tuple[str, str]] = []
+    for row in dead:
+        ats, slug = row["ats"], row["slug"]
+        probe = sources.probe_for(ats)
+        try:
+            if probe(slug):
+                revived.append((ats, slug))
+        except Exception:
+            continue
+    if revived:
+        with pool.connection() as conn:
+            with conn.transaction():
+                with conn.cursor() as cursor:
+                    cursor.executemany(
+                        """
+                        UPDATE job_boards
+                        SET is_active = true, consecutive_failures = 0, last_error = NULL,
+                            last_discovered_at = now(), updated_at = now()
+                        WHERE ats = %s AND slug = %s
+                        """,
+                        revived,
+                    )
+    return len(revived)
 
 
 def _fetch_greenhouse_description(slug: str, source_job_id: str) -> str:
@@ -160,9 +231,34 @@ def _fetch_greenhouse_description(slug: str, source_job_id: str) -> str:
     return payload.get("content") or "" if isinstance(payload, dict) else ""
 
 
-def _fetch_board(board: dict[str, Any], use_etag: bool) -> dict[str, Any]:
+def _detail_description(ats: str, slug: str, source_job_id: str) -> str:
+    """Second request for a description a board's list endpoint omits.
+
+    Greenhouse and SmartRecruiters both return postings without body text; the
+    classifier needs that text to detect India remote-eligibility and skills.
+    """
+    if ats == "greenhouse":
+        return _fetch_greenhouse_description(slug, source_job_id)
+    if ats in sources.EXTRA_ATS:
+        return sources.describe(ats, slug, source_job_id)
+    return ""
+
+
+def _board_records(board: dict[str, Any], use_etag: bool) -> dict[str, Any]:
+    """Fetch and normalize one board's postings.
+
+    Returns a terminal result ({"status": "unchanged"|"dead"|"error", ...}) or
+    {"status": "ok", "normalized": [...], "etag": str|None}.
+    """
     ats = board["ats"]
     slug = board["slug"]
+
+    if ats in sources.EXTRA_ATS:
+        result = sources.fetch_records(board, use_etag)
+        result.setdefault("ats", ats)
+        result.setdefault("slug", slug)
+        return result
+
     meta: dict[str, Any] = {}
     try:
         raw = upstream.fetch(
@@ -203,6 +299,17 @@ def _fetch_board(board: dict[str, Any], use_etag: bool) -> dict[str, Any]:
         if norm is None or not norm.get("id"):
             continue
         normalized.append(upstream._clean(norm))
+    return {"status": "ok", "ats": ats, "slug": slug, "normalized": normalized, "etag": meta.get("etag")}
+
+
+def _fetch_board(board: dict[str, Any], use_etag: bool) -> dict[str, Any]:
+    ats = board["ats"]
+    slug = board["slug"]
+
+    records = _board_records(board, use_etag)
+    if records["status"] != "ok":
+        return records
+    normalized = records["normalized"]
 
     effective_india_company = bool(board.get("is_india_company")) or is_known_indian_company(slug)
     target_rows: list[dict[str, Any]] = []
@@ -219,8 +326,15 @@ def _fetch_board(board: dict[str, Any], use_etag: bool) -> dict[str, Any]:
             or effective_india_company
             or is_known_indian_company(slug)
         )
-        if ats == "greenhouse" and prelim_software and prelim_india:
-            detail = _fetch_greenhouse_description(slug, str(norm["id"]))
+        # Pull the full description when the list endpoint omitted it AND the role
+        # could plausibly be a target — India-linked, or remote (the remote path
+        # needs body text to confirm India eligibility).
+        if (
+            not description
+            and prelim_software
+            and (prelim_india or bool(norm.get("isRemote")))
+        ):
+            detail = _detail_description(ats, slug, str(norm["id"]))
             if detail:
                 description = plain_text(detail)
 
@@ -281,7 +395,7 @@ def _fetch_board(board: dict[str, Any], use_etag: bool) -> dict[str, Any]:
         "status": "modified",
         "ats": ats,
         "slug": slug,
-        "etag": meta.get("etag"),
+        "etag": records.get("etag"),
         "jobs_seen": len(normalized),
         "target_rows": target_rows,
         "is_india_company": effective_india_company,
@@ -533,6 +647,59 @@ def _persist_board_result(result: dict[str, Any]) -> dict[str, int]:
             return counts
 
 
+def _promote_india_companies() -> int:
+    """Flag a board as an Indian company once enough of its roles are India-located.
+
+    A flagged board also contributes its geography-neutral remote roles to the
+    feed, so this recovers remote openings from companies the bootstrap list and
+    slug hints did not name. Sticky: is_india_company is never cleared here.
+    """
+    with pool.connection() as conn:
+        rows = conn.execute(
+            """
+            WITH board_signal AS (
+                SELECT ats, board_slug,
+                    count(*) AS total,
+                    count(*) FILTER (WHERE india_match_reason = 'india_location') AS india_hits
+                FROM jobs WHERE is_active
+                GROUP BY ats, board_slug
+            )
+            UPDATE job_boards b
+            SET is_india_company = true, updated_at = now()
+            FROM board_signal s
+            WHERE b.ats = s.ats AND b.slug = s.board_slug
+                AND NOT b.is_india_company
+                AND (
+                    s.india_hits >= 3
+                    OR (s.total >= 2 AND s.india_hits::numeric / s.total >= 0.4)
+                )
+            RETURNING 1
+            """
+        ).fetchall()
+    return len(rows)
+
+
+def _close_stale_jobs() -> int:
+    """Close still-listed postings whose publish date is older than STALE_JOB_DAYS.
+
+    Some boards never remove evergreen or pipeline requisitions. On the monthly
+    unconditional sweep every live posting was just re-fetched, so age is the only
+    signal left that a role is not a real current opening.
+    """
+    with pool.connection() as conn:
+        closed = conn.execute(
+            """
+            UPDATE jobs SET is_active = false,
+                closed_at = COALESCE(closed_at, now()), updated_at = now()
+            WHERE is_active
+                AND COALESCE(published_at, first_seen_at) < now() - (%s * interval '1 day')
+            RETURNING 1
+            """,
+            (STALE_JOB_DAYS,),
+        ).fetchall()
+    return len(closed)
+
+
 def create_or_get_run(mode: str) -> tuple[str, bool]:
     if mode not in ALLOWED_MODES:
         raise ValueError(f"unsupported ingestion mode: {mode}")
@@ -675,6 +842,13 @@ def run_ingestion(run_id: str, mode: str, limit_per_ats: int | None = None) -> N
                         counters[key] += delta[key]
                     if counters["checked"] % PROGRESS_INTERVAL == 0:
                         _update_run(run_id, counters)
+
+            # Post-sweep maintenance. Promotion runs every sweep (cheap, high
+            # value); the destructive stale-close only on the unconditional
+            # monthly run, where every live posting was just re-confirmed.
+            _promote_india_companies()
+            if mode == "full_discovery":
+                counters["closed"] += _close_stale_jobs()
 
             _update_run(
                 run_id,

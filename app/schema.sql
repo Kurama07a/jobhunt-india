@@ -8,7 +8,7 @@ CREATE TABLE IF NOT EXISTS schema_meta (
 );
 
 CREATE TABLE IF NOT EXISTS job_boards (
-    ats text NOT NULL CHECK (ats IN ('ashby', 'greenhouse', 'lever')),
+    ats text NOT NULL CHECK (ats IN ('ashby', 'greenhouse', 'lever', 'smartrecruiters')),
     slug text NOT NULL,
     display_name text NOT NULL,
     is_india_company boolean NOT NULL DEFAULT false,
@@ -27,7 +27,7 @@ CREATE TABLE IF NOT EXISTS job_boards (
 
 CREATE TABLE IF NOT EXISTS jobs (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    ats text NOT NULL CHECK (ats IN ('ashby', 'greenhouse', 'lever')),
+    ats text NOT NULL CHECK (ats IN ('ashby', 'greenhouse', 'lever', 'smartrecruiters')),
     source_job_id text NOT NULL,
     board_slug text NOT NULL,
     company text NOT NULL,
@@ -123,7 +123,48 @@ CREATE INDEX IF NOT EXISTS jobs_search_idx
 CREATE INDEX IF NOT EXISTS ingestion_runs_requested_idx
     ON ingestion_runs (requested_at DESC);
 
+-- Idempotent migrations for existing databases. schema.sql is executed on every
+-- boot, so every statement here must be safe to run repeatedly.
+
+-- Widen the ats CHECK constraints to cover platforms added after v1. CREATE TABLE
+-- IF NOT EXISTS never alters a table that already exists, so a running database
+-- keeps its original 3-value constraint until this runs.
+DO $$
+DECLARE c record;
+BEGIN
+    FOR c IN
+        SELECT conrelid::regclass AS tbl, conname
+        FROM pg_constraint
+        WHERE contype = 'c'
+            AND conrelid IN ('job_boards'::regclass, 'jobs'::regclass)
+            AND pg_get_constraintdef(oid) ILIKE '%ats%'
+            AND pg_get_constraintdef(oid) NOT ILIKE '%smartrecruiters%'
+    LOOP
+        EXECUTE format('ALTER TABLE %s DROP CONSTRAINT %I', c.tbl, c.conname);
+    END LOOP;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'job_boards_ats_check' AND conrelid = 'job_boards'::regclass
+    ) THEN
+        ALTER TABLE job_boards ADD CONSTRAINT job_boards_ats_check
+            CHECK (ats IN ('ashby', 'greenhouse', 'lever', 'smartrecruiters'));
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'jobs_ats_check' AND conrelid = 'jobs'::regclass
+    ) THEN
+        ALTER TABLE jobs ADD CONSTRAINT jobs_ats_check
+            CHECK (ats IN ('ashby', 'greenhouse', 'lever', 'smartrecruiters'));
+    END IF;
+END $$;
+
+-- Board discovery bookkeeping: when a board slug was last confirmed to exist by a
+-- directed probe. Lets full-discovery resurrect a board that 404'd transiently.
+ALTER TABLE job_boards ADD COLUMN IF NOT EXISTS last_discovered_at timestamptz;
+
 INSERT INTO schema_meta (key, value)
-VALUES ('schema_version', '1')
+VALUES ('schema_version', '2')
 ON CONFLICT (key) DO UPDATE
 SET value = excluded.value, updated_at = now();

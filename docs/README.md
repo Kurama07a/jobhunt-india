@@ -30,6 +30,7 @@ from PostgreSQL — the database, not the browser, owns classification and lifec
 |---|---|
 | [architecture.md](architecture.md) | Components, process model, runtime topology, design principles |
 | [job-sources.md](job-sources.md) | Where jobs come from: upstream `job-boards`, ATS APIs, board discovery, ETags, good‑citizen contract |
+| [coverage-analysis.md](coverage-analysis.md) | The discovery→classification funnel, where coverage leaks, and the SmartRecruiters + directed‑discovery + remote‑path expansion |
 | [data-flow.md](data-flow.md) | End‑to‑end flow of one ingestion run, step by step, with the board/job state machines |
 | [classification.md](classification.md) | The India + software classifier, experience extraction, skills, salary, early‑career scoring |
 | [database.md](database.md) | Schema, every table and column, indexes, upsert SQL, lifecycle rules, advisory locking |
@@ -48,6 +49,7 @@ app/
   main.py         FastAPI application: routes, middleware, lifespan, admin auth
   ingestion.py    Sweep orchestrator: board discovery, fetch, persist, run bookkeeping
   classifier.py   Pure functions: India match, software match, experience/skills/salary
+  sources.py      SmartRecruiters adapter + directed India-focused board discovery
   config.py       Environment-driven Settings (frozen dataclass)
   db.py           psycopg connection pool + schema bootstrap
   schema.sql      Full PostgreSQL schema (idempotent, applied on startup)
@@ -55,6 +57,7 @@ app/
   static/         Dashboard: index.html, app.js, styles.css (no third-party runtime assets)
 data/
   india-boards.seed.json   Curated Indian-company board slugs merged on every run
+  indian-companies.json    ~320-company roster driving slug hints + directed discovery
 n8n/
   jobhunt-india-ingestion.json               Schedule + manual ingestion workflow
   jobhunt-india-continuous-deployment.json   GitHub -> Coolify deployment bridge

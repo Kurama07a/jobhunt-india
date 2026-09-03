@@ -14,15 +14,24 @@ fork or modify it.
 
 ---
 
-## The three sources (ATS vendors)
+## The four sources (ATS vendors)
 
-`upstream.SOURCES` defines one adapter per vendor:
+`upstream.SOURCES` defines an adapter for the first three; `app/sources.py`
+(`EXTRA_ATS`) adds SmartRecruiters natively. `ingestion.ALL_ATS` is the union and is
+what every board-grouping loop iterates.
 
 | ATS | Board API endpoint (`{slug}` = company identifier) | Jobs array | Full description |
 |---|---|---|---|
 | **Ashby** | `https://api.ashbyhq.com/posting-api/job-board/{slug}` | `payload["jobs"]` | included in list response |
 | **Greenhouse** | `https://boards-api.greenhouse.io/v1/boards/{slug}/jobs` | `payload["jobs"]` | **not** in list response — needs a per‑job call with `?content=true` |
 | **Lever** | `https://api.lever.co/v0/postings/{slug}?mode=json` | the response *is* the array | included in list response |
+| **SmartRecruiters** | `https://api.smartrecruiters.com/v1/companies/{slug}/postings?country=in` | `payload["content"]`, paginated by `offset` (100/page, capped at 1500) | **not** in list response — needs `GET .../postings/{id}` → `jobAd.sections.*.text` |
+
+SmartRecruiters is fetched India-only (`country=in`) — a global board like `BoschGroup`
+drops from ~4,800 postings to a few hundred. An unknown company slug returns HTTP 200
+with `totalFound: 0`, which the adapter treats as an exhaustive empty response (board
+kept, its jobs closed). See [coverage-analysis.md](coverage-analysis.md) for why
+Workable / Recruitee / Keka / Freshteam / Zoho Recruit were evaluated and deferred.
 
 Each adapter provides:
 
@@ -40,19 +49,19 @@ Each adapter provides:
 - `junk_prefixes` — internal path prefixes to ignore during slug discovery (e.g. Ashby's
   `root.`).
 
-### Greenhouse selective description fetch
+### Selective description fetch (Greenhouse & SmartRecruiters)
 
-Greenhouse's list endpoint omits descriptions. In `_fetch_board()`
-(`app/ingestion.py:222`), JobHunt India does a **preliminary** software+India check using
-only the title/department/team/location. **Only if both look promising** does it make the
-extra call:
+Both list endpoints omit descriptions. In `_fetch_board()` JobHunt India runs a
+**preliminary** software check on title/department/team, then makes the extra call
+**only when** the posting is prelim‑software **and** (India‑linked **or** remote — the
+remote‑eligibility check needs the body text). `_detail_description()` dispatches to
+`_fetch_greenhouse_description()` (`…/jobs/{id}?content=true`) or, for extra‑ATS
+platforms, `sources.describe()` (SmartRecruiters `…/postings/{id}` → `jobAd.sections`).
 
-```
-GET https://boards-api.greenhouse.io/v1/boards/{slug}/jobs/{source_job_id}?content=true
-```
-
-via `_fetch_greenhouse_description()`. This keeps the expensive per‑job fetch off the vast
-majority of non‑matching Greenhouse postings.
+The earlier gate also required the *India* signal before fetching, which made the
+remote‑from‑India path impossible on Greenhouse (the check needs the description that the
+gate withheld). Adding "or remote" fixed that — see
+[coverage-analysis.md](coverage-analysis.md) Tier 2.
 
 ---
 
@@ -82,9 +91,26 @@ majority of non‑matching Greenhouse postings.
    "recent_discovery" | "full_discovery")` — an idempotent upsert into `job_boards`
    (`ON CONFLICT (ats, slug) DO UPDATE`). The function returns the net number of new
    board rows, recorded as `ingestion_runs.boards_discovered`.
+4. **Directed discovery** (`sources.discover_indian_boards`) — probe **every** ATS
+   endpoint (including SmartRecruiters) with slug candidates generated from
+   `data/indian-companies.json`. Slug guesses that resolve (HEAD 200 for the upstream
+   three; `totalFound > 0` for SmartRecruiters) are imported as `discovered_via =
+   "directed_india"`. This reaches boards no web archive captured and is where most
+   net‑new India coverage now comes from.
+5. **Dead-board resurrection** (`full_discovery` only) — every `is_active = false`
+   board is re‑probed; one that now resolves is reactivated with
+   `last_discovered_at = now()`. A transient 404 no longer removes a company forever.
 
 `recent` mode ("~4 minutes") restricts Wayback to the last 30 days; full discovery
-("~26 minutes") crawls the entire index.
+("~26 minutes") crawls the entire index. Directed discovery adds ~2–4 minutes.
+
+### `is_india_company` auto-promotion
+
+After every sweep, `_promote_india_companies()` flags any board with **≥3** active
+`india_location` postings (or **≥40%** of ≥2). A flagged board also contributes its
+geography‑neutral *remote* roles. This recovers openings from India‑heavy companies the
+bootstrap list never named (InMobi, Glance, Turing, Zeta, Porter, …). The flag is
+sticky — never cleared here.
 
 ### Seed boards
 
@@ -93,21 +119,27 @@ of mode:
 
 - `<job-boards>/boards.seed.json` — the upstream's small curated list, so a fresh install
   has boards to check without touching any archive. `discovered_via = "upstream_seed"`.
-- `data/india-boards.seed.json` — JobHunt India's own curated Indian‑company slugs.
-  `discovered_via = "india_seed"`. Current contents:
-  - greenhouse: `groww`, `postman`, `razorpaysoftwareprivatelimited`, `slice`
-  - lever: `cred`, `meesho`, `mindtickle`
+- `data/india-boards.seed.json` — JobHunt India's own curated slugs, keyed by ATS
+  (`ashby`, `greenhouse`, `lever`, `smartrecruiters`). `discovered_via = "india_seed"`.
 
-Boards imported from any seed are matched against `INDIAN_COMPANY_HINTS`
-(`app/classifier.py:105`) so recognised Indian companies get `is_india_company = true`
-immediately. During scans, `is_india_company` is sticky — it is only ever OR‑ed to `true`,
-never cleared.
+Boards imported from any seed are matched against the known‑Indian‑company set —
+the built‑in bootstrap list in `app/classifier.py` **merged with the slug hints from
+`data/indian-companies.json`** (~40 → ~430 normalized entries) — so recognised
+companies get `is_india_company = true` immediately. During scans the flag is sticky:
+only ever OR‑ed to `true`, never cleared.
 
 ---
 
 ## Fetching a board
 
-`_fetch_board(board, use_etag)` (`app/ingestion.py:163`) for one board:
+`_fetch_board(board, use_etag)` calls `_board_records(board, use_etag)` to get the
+normalized postings, then runs the shared classify‑and‑build loop. `_board_records`
+branches by platform: an extra‑ATS board (SmartRecruiters) goes to
+`sources.fetch_records` (pagination + `country=in`); the upstream three take the path
+below. Both return the same shape — a terminal `{"status": "unchanged"|"dead"|"error"}`
+or `{"status": "ok", "normalized": [...], "etag": …}`.
+
+For the upstream three, per board:
 
 1. `upstream.fetch(upstream.board_url(ats, slug), etag=<stored etag if use_etag>,
    meta=meta)`.

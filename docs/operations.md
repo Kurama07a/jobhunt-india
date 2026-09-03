@@ -83,6 +83,20 @@ Ideal for a first‑run sanity check against real ATS APIs without a 13k‑board
 
 ## Runbook
 
+### "Is coverage growing? Where is it leaking?"
+`GET /api/admin/coverage` (with `X-Ingest-Token`) — the full funnel: board totals and
+per‑ATS productivity, jobs by `india_match_reason` / `experience_level`, early‑career
+count, freshness, and the last 12 runs' `boards_discovered` / `jobs_targeted`. If
+`boards_discovered` is 0 for several runs, discovery has stalled — check the monthly
+`full_discovery` cron and consider growing `data/indian-companies.json`.
+
+### "Add a company I know is hiring in India"
+Add it to `data/indian-companies.json` (`{"name": …, "slugs": [best-guess, …]}`) and/or
+`data/india-boards.seed.json` under the right ATS. It is picked up on the next ingestion
+(`ensure_seed_boards` + directed discovery). New ATS platform → see
+[coverage-analysis.md](coverage-analysis.md); it is an `EXTRA_ATS` entry in
+`app/sources.py` plus a widened `ats` CHECK.
+
 ### "The feed looks stale"
 1. `GET /api/sync-status` — check `status` and `finished_at` of the latest run.
 2. If `status = "failed"`: `GET /api/admin/runs/{id}` (with `X-Ingest-Token`) for

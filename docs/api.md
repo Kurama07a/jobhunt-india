@@ -11,7 +11,8 @@ Two trust tiers:
 - **Public** — no auth, safe for the browser: `/`, `/health`, `/api/stats`,
   `/api/filters`, `/api/jobs`, `/api/jobs/{id}`, `/api/sync-status`, `/robots.txt`.
 - **Admin** — requires header `X-Ingest-Token: <INGEST_TOKEN>`, compared with
-  `hmac.compare_digest`: `/api/admin/ingest`, `/api/admin/runs/{id}`.
+  `hmac.compare_digest`: `/api/admin/ingest`, `/api/admin/runs/{id}`,
+  `/api/admin/coverage`.
 
 ---
 
@@ -85,7 +86,7 @@ The paginated, filterable feed. All parameters optional.
 | `levels` | CSV of `internship,entry,mid,senior,unknown` | `experience_level = ANY(...)`; unknown value → `422` |
 | `days` | int 1..3650 | `COALESCE(published_at, first_seen_at) >= now() - days` |
 | `remote` | bool | `is_remote = <value>` |
-| `ats` | CSV of `ashby,greenhouse,lever` | `ats = ANY(...)`; unknown value → `422` |
+| `ats` | CSV of `ashby,greenhouse,lever,smartrecruiters` | `ats = ANY(...)`; unknown value → `422` |
 | `company` | string ≤ 180 | exact `company = <value>` |
 | `location` | string ≤ 180 | `location ILIKE '%<value>%'` |
 | `skills` | CSV ≤ 300 | `skills && ARRAY[...]` (overlap) |
@@ -170,6 +171,30 @@ If a run is already active, `created` is `false` and `status` is `already_runnin
 `run_id` is that existing run.
 
 `401` if the token is missing/wrong.
+
+### `GET /api/admin/coverage`
+The discovery → classification funnel, for spotting where coverage leaks. Header
+`X-Ingest-Token` required.
+
+```json
+{
+  "boards": { "total": 13334, "active": 13314, "india_company": 8,
+              "dead": 20, "failing": 22, "directed_confirmed": 0 },
+  "boards_by_ats": [
+    { "ats": "greenhouse", "boards": 6802, "india_company_boards": 4,
+      "productive_boards": 346, "active_jobs": 1801 }, …
+  ],
+  "jobs": { "active": 2942, "early_career": 114, "remote": 571,
+            "fresh_30d": 904, "older_90d": 1201, "median_age_days": 63.0 },
+  "jobs_by_india_match_reason": [ { "reason": "india_location", "count": 2911 }, … ],
+  "jobs_by_experience_level":  [ { "level": "senior", "count": 2023 }, … ],
+  "recent_runs": [ { "mode": "incremental", "status": "completed",
+                     "requested_at": "…", "boards_discovered": 0, "jobs_targeted": 422 }, … ]
+}
+```
+
+`productive_boards` = distinct boards with ≥1 active job. `directed_confirmed` = boards
+with `last_discovered_at` set. See [coverage-analysis.md](coverage-analysis.md).
 
 ### `GET /api/admin/runs/{run_id}`
 Full run detail including `error` and `metadata` (the public `/api/sync-status` omits
