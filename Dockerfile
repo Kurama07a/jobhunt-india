@@ -1,4 +1,4 @@
-FROM alpine/git:2.49.1@sha256:c0280cf9572316299b08544065d3bf35db65043d5e3963982ec50647d2746e26 AS upstream
+FROM alpine/git:v2.52.0@sha256:4a0e72d49596a1f5d3701aeedafdadc5c0da4062be4657c7bdc4017387f591cc AS upstream
 
 ARG JOB_BOARDS_COMMIT=da7885cff552c513319318f2f31ed23f049f426e
 RUN git clone --filter=blob:none https://github.com/mherzog4/job-boards.git /source/job-boards \
